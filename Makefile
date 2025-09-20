@@ -1,8 +1,8 @@
 
-all: guest.img kvm_zadatak3
+all: guest.img mini_hypervisor
 
-kvm_zadatak3: kvm_zadatak3.c
-	gcc kvm_zadatak3.c -o kvm_zadatak3
+mini_hypervisor: mini_hypervisor.c
+	gcc mini_hypervisor.c -o mini_hypervisor
 
 guest.img: guest.o
 	ld -T guest.ld guest.o -o guest.img
@@ -11,4 +11,4 @@ guest.o: guest.c
 	$(CC) -m64 -ffreestanding -fno-pic -c -o $@ $^
 
 clean:
-	rm -f kvm_zadatak3 guest.o guest.img
+	rm -f mini_hypervisor guest.o guest.img

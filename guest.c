@@ -11,7 +11,7 @@ _start(void) {
 	const char *p;
 	uint16_t port = 0xE9;
 
-	for (p = "Hello, world!\n"; *p; ++p)
+	for (p = "Poz!\n"; *p; ++p)
 		outb(0xE9, *p);
 
 	for (;;)
