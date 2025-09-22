@@ -2,7 +2,7 @@
 all: guest.img mini_hypervisor
 
 mini_hypervisor: mini_hypervisor.c
-	gcc -g mini_hypervisor.c -o mini_hypervisor
+	gcc -g  mini_hypervisor.c -o mini_hypervisor -pthread
 
 guest.img: guest.o
 	ld -T guest.ld guest.o -o guest.img

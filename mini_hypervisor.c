@@ -20,7 +20,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <linux/kvm.h>
-
+#include <pthread.h>
 
 #define TRUE 1
 #define FALSE 0
@@ -57,7 +57,7 @@ struct vm {
 	struct kvm_run *run;
 	int run_mmap_size;
 };
-
+static int regionCnt = 0;
 int vm_init(struct vm *v, size_t mem_size)
 {
 	struct kvm_userspace_memory_region region;	
@@ -198,18 +198,10 @@ static void setup_segments_64(struct kvm_sregs *sregs)
 // https://docs.amd.com/v/u/en-US/24593_3.43
 // Pogledati figuru 5.1 na stranici 128.
 
-// za 4 nivoa ugnjezdavanja = 4KB page
-// VA : [sign extend | Page-Map Level-4 Offset | Page-Directory Pointer Offset | Page-Directory Offset | Page-Table Offset | Physical-Page-Offset]
-// VA : [...|	PML4(9b) |  PDPO(9b)  |  PDO(9b)  |  PTO(9b)  |  OFFSET(12b) ]
-//					|9b		 	       ...
-//					|			 				 ...													4KB page size
-//    			>[     ]	 [     ]   [     ]	 [     ]   [     ] <- 12b offset unutar stranice
-//    			 [ ... ]	 [ ... ]   [ ... ]   [ ... ]	 [ ... ]
-//				-> [     ]52>[     ]52>[     ]52>[     ]52>[     ]
-// CR3 : [  32b PLM4 start address | 000]
 
 #define IO_PORT 0xE9
-int GUEST_IMG = FALSE;
+int GUEST_IMG_START = FALSE;
+int GUEST_IMG_END = FALSE;
 size_t MEM_SIZE = FALSE; // 2 or 4 or 8 MB
 int PAGE_SIZE = FALSE; // 2(MB) or 4(KB)
 size_t page_tables_sz = 0;
@@ -339,27 +331,12 @@ int load_guest_image(struct vm *v, const char *image_path, uint64_t load_addr) {
 }
 
 
-// ./mini_hypervisor --memory or -m 2or4or8 --page or -p 4or2 --guest guest.img
-// Обезбедити следеће основне особине хипервизора:
-// • Величина физичке меморије госта је 2MB, 4МB или 8MB. Одговарајућа величина се задаје као
-// параметар командне линије хипервизора преко опције -m или --memory.
-// • Виртуелна машина (ВМ) раде у 64-битном моду (long mode).
-// • Величина странице је 4KB или 2MB. Одговарајућа величина се задаје као параметар командне
-// линије хипервизора преко опције -p или --page.
-// • ВМ са само једним виртуелним процесором.
-// • Подржава серијски испис и читање на IO порт 0xE9. Величина података који може да се
-// пише/прочита на/са порт је 1 бајт.
-// • Подржава само ВМ које завршавају извршавање инструкцијом hlt.
-// • Учитавање и покретање госта који је дат као параметар командне линије хипервизора преко
-// опције -g или --guest.
-
-// #define MEM_SIZE (2u * 1024u * 1024u) // Veličina memorije će biti 2MB
-
-
 int parse_arguments(int argc, char *argv[]){
+	int guest_command_start = FALSE;
 	for(int i = 1; i < argc; i++){
 		char* param = argv[i];
 		if(!strcmp(param, "--memory") || !strcmp(param, "-m")){
+			guest_command_start = FALSE;
 			if(MEM_SIZE){
 				printf("invalid arguments: memory size already defined\n");
 				return -1;
@@ -376,6 +353,7 @@ int parse_arguments(int argc, char *argv[]){
 			MEM_SIZE = (mem_sz_in_mb * 1024 * 1024);
 
 		}else if(!strcmp(param, "--page") || !strcmp(param, "-p")){
+			guest_command_start = FALSE;
 			if(PAGE_SIZE){
 				printf("invalid arguments: page size already defined\n");
 				return -1;
@@ -391,38 +369,40 @@ int parse_arguments(int argc, char *argv[]){
 			}
 			
 		}else if(!strcmp(param, "--guest") || !strcmp(param, "-g")){
-			if(GUEST_IMG){
+			if(GUEST_IMG_START){
 				printf("invalid arguments: guest image already defined\n");
 				return -1;
 			}
+			guest_command_start = TRUE;
 			if(argc <= i+1){
 				printf("not enough arguments\n");
 				return -1;
 			}
-			GUEST_IMG = ++i;
+			GUEST_IMG_START = GUEST_IMG_END = ++i;
 		}
 		else{
-			
-			printf("unknown argument: %s\n", param);
-			return -1;
+			if(guest_command_start == FALSE){
+				printf("unknown argument: %s\n", param);
+				return -1;
+			}
+			GUEST_IMG_END = i;
 	
 		}
 	}
-	if(MEM_SIZE==FALSE || PAGE_SIZE==FALSE || GUEST_IMG==FALSE){
+	if(MEM_SIZE==FALSE || PAGE_SIZE==FALSE || GUEST_IMG_START==FALSE){
 		printf("not enough arguments\n");
 		return -1;
 	}
 	LOG(printf("MEM_SIZE = %lx \n", MEM_SIZE));
 	LOG(printf("PAGE_SIZE = %d \n", PAGE_SIZE));
-	LOG(printf("GUEST_IMAGE = %s \n", argv[GUEST_IMG]));
+	
+	for(int i = GUEST_IMG_START; i <= GUEST_IMG_END; i++){
+		LOG(printf("GUEST_IMAGE = %s \n", argv[i]));
+	}
 	
 }
 
-int main(int argc, char *argv[])
-{
-	if(parse_arguments(argc, argv) < 0){
-		return -1;
-	}
+static void* hypervisor_thread(void* guest_img_name){
 	
 	struct vm v;
 	struct kvm_sregs sregs; // specijalni registri
@@ -431,21 +411,16 @@ int main(int argc, char *argv[])
 	int ret = 0;
 	FILE* img;
 
-	// if (argc != 2) {
-  //   	printf("The program requests an image to run: %s <guest-image>\n", argv[0]);
-  //   	return 1;
-  // 	}
-
 	if (vm_init(&v, MEM_SIZE)) {
 		printf("Failed to init the VM\n");
-		return 1;
+		return 0;
 	}
 
 	// Dohvatanje specijalnih registara
 	if (ioctl(v.vcpu_fd, KVM_GET_SREGS, &sregs) < 0) {
 		perror("KVM_GET_SREGS");
 		vm_destroy(&v);
-		return 1;
+		return 0;
 	}
 	
 	setup_long_mode(&v, &sregs);
@@ -453,13 +428,13 @@ int main(int argc, char *argv[])
   if (ioctl(v.vcpu_fd, KVM_SET_SREGS, &sregs) < 0) {
 		perror("KVM_SET_SREGS");
 		vm_destroy(&v);
-		return 1;
+		return 0;
 	}
 	// ucitavanje img
-	if (load_guest_image(&v, argv[GUEST_IMG], GUEST_START_ADDR) < 0) {
+	if (load_guest_image(&v, (const char*)guest_img_name, GUEST_START_ADDR) < 0) {
 		printf("Failed to load guest image\n");
 		vm_destroy(&v);
-		return 1;
+		return 0;
 	}
 	// postavljanje registar
 	memset(&regs, 0, sizeof(regs));
@@ -475,7 +450,7 @@ int main(int argc, char *argv[])
 
 	if (ioctl(v.vcpu_fd, KVM_SET_REGS, &regs) < 0) {
 		perror("KVM_SET_REGS");
-		return 1;
+		return 0;
 	}
 
 	// hipervizor
@@ -484,7 +459,7 @@ int main(int argc, char *argv[])
 		if (ret == -1) {
 			printf("KVM_RUN failed\n");
 			vm_destroy(&v);
-			return 1;
+			return 0;
 		}
 
 		switch (v.run->exit_reason) {
@@ -515,4 +490,37 @@ int main(int argc, char *argv[])
   	}
 
 	vm_destroy(&v);
+}
+
+int main(int argc, char *argv[])
+{
+	if(parse_arguments(argc, argv) < 0){
+		return -1;
+	}
+	int N = GUEST_IMG_END - GUEST_IMG_START + 1;
+	pthread_t *threads = malloc(N * sizeof(pthread_t));
+  
+  if (!threads) {
+      perror("malloc");
+      return -1;
+  }
+  
+  for (int i = 0; i < N; i++) {
+      
+      if (pthread_create(&threads[i], NULL, &hypervisor_thread, argv[GUEST_IMG_START]) != 0) {
+          perror("pthread_create");
+          free(threads);
+         
+          return -1;
+      }
+  }
+  
+  for (int i = 0; i < N; i++) {
+      pthread_join(threads[i], NULL);
+  }
+  free(threads);
+
+  printf("Sve %d niti su završile.\n", N);
+
+	
 }
