@@ -16,9 +16,9 @@ __attribute__((section(".start")))
 _start(void) {
 	const char *p;
 	uint16_t port = 0xE9;
-	uint8_t c = inb(port);
-	outb(port, c);
-	for (p = "Poz1!\n"; *p; ++p)
+	// uint8_t c = inb(port);
+	// outb(port, c);
+	for (p = "Poz2!\n"; *p; ++p)
 		outb(0xE9, *p);
 
 	for (;;)

@@ -507,7 +507,7 @@ int main(int argc, char *argv[])
   
   for (int i = 0; i < N; i++) {
       
-      if (pthread_create(&threads[i], NULL, &hypervisor_thread, argv[GUEST_IMG_START]) != 0) {
+      if (pthread_create(&threads[i], NULL, &hypervisor_thread, argv[GUEST_IMG_START+i]) != 0) {
           perror("pthread_create");
           free(threads);
          
