@@ -25,7 +25,14 @@
 #define TRUE 1
 #define FALSE 0
 
-#define GUEST_START_ADDR 0x8000 // Početna adresa za učitavanje gosta
+uint64_t GUEST_START_ADDR = 0x0; // Početna adresa za učitavanje gosta
+#define ENABLE_LOG 0
+
+#if ENABLE_LOG
+  #define LOG(x) x;
+#else
+  #define LOG(x) do {} while(0);
+#endif
 
 // PDE bitovi
 #define PDE64_PRESENT (1u << 0)
@@ -191,7 +198,7 @@ static void setup_segments_64(struct kvm_sregs *sregs)
 // https://docs.amd.com/v/u/en-US/24593_3.43
 // Pogledati figuru 5.1 na stranici 128.
 
-// za 4 nivoa ugnjezdavanja
+// za 4 nivoa ugnjezdavanja = 4KB page
 // VA : [sign extend | Page-Map Level-4 Offset | Page-Directory Pointer Offset | Page-Directory Offset | Page-Table Offset | Physical-Page-Offset]
 // VA : [...|	PML4(9b) |  PDPO(9b)  |  PDO(9b)  |  PTO(9b)  |  OFFSET(12b) ]
 //					|9b		 	       ...
@@ -200,6 +207,12 @@ static void setup_segments_64(struct kvm_sregs *sregs)
 //    			 [ ... ]	 [ ... ]   [ ... ]   [ ... ]	 [ ... ]
 //				-> [     ]52>[     ]52>[     ]52>[     ]52>[     ]
 // CR3 : [  32b PLM4 start address | 000]
+
+#define IO_PORT 0xE9
+int GUEST_IMG = FALSE;
+size_t MEM_SIZE = FALSE; // 2 or 4 or 8 MB
+int PAGE_SIZE = FALSE; // 2(MB) or 4(KB)
+size_t page_tables_sz = 0;
 static void setup_long_mode(struct vm *v, struct kvm_sregs *sregs)
 {
 	// Postavljanje 4 niva ugnjezdavanja.
@@ -207,49 +220,74 @@ static void setup_long_mode(struct vm *v, struct kvm_sregs *sregs)
   // Odatle sledi da je veličina tabela stranica 4KB. Ove tabele moraju da budu poravnate na 4KB
 	// jer su velicine 4KB.
 
-	// postavljamo tabelu u memoriju
-	uint64_t page = 0;
-	uint64_t pml4_addr = 0x1000; // Adrese su proizvoljne. Poravnato na 12 zbog kontrolnih bita.
-	uint64_t *pml4 = (void *)(v->mem + pml4_addr); // pokazivac na memoriju gde ce biti tabela 4
-
-	uint64_t pdpt_addr = 0x2000;
-	uint64_t *pdpt = (void *)(v->mem + pdpt_addr); //  pokazivac na memoriju gde ce biti tabela 3
-
-	uint64_t pd_addr = 0x3000;
-	uint64_t *pd = (void *)(v->mem + pd_addr); //  pokazivac na memoriju gde ce biti tabela 2
-
-	uint64_t pt_addr = 0x4000;
-	uint64_t *pt = (void *)(v->mem + pt_addr); //  pokazivac na memoriju gde ce biti tabela 1
-
 	// PDE64_PRESENT - stranica ucitana u memoriju 
 	// PDE64_RW - citanje i upis dozvoljeno
 	// PDE64_USER - prava pristupa USER - vm ce moci da pristupa samo tim stranicama
 	// a ne supervisor stranicama
-
-	// Ulancavanje tabela
-	pml4[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pdpt_addr;
-	pdpt[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pd_addr;
-	// 2MB page size
-	// pd[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | PDE64_PS;
-
-	// 4KB page size
-	// -----------------------------------------------------
-	pd[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pt_addr;
-	// PC vrednost se mapira na ovu stranicu.
-	pt[0] = GUEST_START_ADDR | PDE64_PRESENT | PDE64_RW | PDE64_USER;
-	// SP vrednost se mapira na ovu stranicu. Vrednost 0x6000 je proizvoljno tu postavljena.
-  pt[511] = 0x6000 | PDE64_PRESENT | PDE64_RW | PDE64_USER;
 	
-	// FOR petlja služi tome da mapiramo celu memoriju sa stranicama 4KB.
-	// Zašto je uslov i < 512? Odgovor: jer je memorija veličine 2MB.
-	// 2MB/4KB = 512
-	// page = 0;
-	// for(int i = 1; i < 512; i++) {
-	// 	pt[i] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER;
-	// 	page += 0x1000;
-	// }
+	size_t page_sz = ((PAGE_SIZE==2)?(2*1024*1024):(4*1024));
+	size_t page_cnt = MEM_SIZE/ page_sz;
+	LOG(printf("page_cnt = %ld, ", page_cnt));
 
-	// -----------------------------------------------------
+
+
+	// guest start adresa je prva slobodna adresa nakon sto smestimo tabele
+	// rip ce pocinjati od 0 sto znaci da ce se slikati u ulaz 0
+	// ulaz 0 ce pokazivati na GUEST_START_ADDR
+	// tabele stranica su fizicki na pocetku ali su postavljene na kraj VAP
+	// zato SP mora poceti od MEM_SIZE - sizeoftabele
+	uint64_t pml4_addr = (MEM_SIZE-0x1000);
+	uint64_t *pml4 = (void *)(v->mem + pml4_addr); 
+	uint64_t pdpt_addr = (pml4_addr-0x1000);
+	uint64_t *pdpt = (void *)(v->mem + pdpt_addr); //  pokazivac na memoriju gde ce biti tabela 3
+	uint64_t pd_addr = (pdpt_addr-0x1000);
+	uint64_t *pd = (void *)(v->mem + pd_addr); //  pokazivac na memoriju gde ce biti tabela 2
+	pml4[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pdpt_addr; // uvek 1 ulaz
+	pdpt[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pd_addr;
+	uint64_t page = 0;
+	if(PAGE_SIZE==4){
+		size_t pt_cnt = (page_cnt+ 512 - 1) / 512; // 1, 2, 4
+		LOG(printf("pt_cnt = %ld \n", pt_cnt));
+
+		uint64_t pt_addr = (pd_addr-0x1000*pt_cnt);
+		uint64_t *pt = (void *)(v->mem + pt_addr); //  pokazivac na memoriju gde ce biti tabela 1
+
+
+		
+		page_tables_sz = MEM_SIZE - pt_addr;
+		LOG(printf("page_tables_sz = %#lx\n", page_tables_sz));
+		
+
+
+		for(int i = 0; i < pt_cnt; i++){
+			pd[i] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pt_addr ;
+			
+			for(int j = 0; j < 512; j++){ 
+				pt[j] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER;
+				page += page_sz;	
+			}	
+			pt_addr += 0x1000; // poravnato na zbog velicine tabela
+			pt = (void *)(v->mem + pt_addr);
+		}	
+		
+		
+	}else{ // pt unused
+
+		page_tables_sz = MEM_SIZE - pd_addr;
+		LOG(printf("page_tables_sz = %#lx\n", page_tables_sz));
+		LOG(printf("pd_addr = %#lx\n", pd_addr));
+
+		
+		for(int j = 0; j < page_cnt; j++){
+			 
+			pd[j] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER | PDE64_PS; 
+			LOG(printf("%#lx\n", page));
+			page += page_sz;	
+		}	
+
+		
+		
+	}
 
 	// Registar koji ukazuje na PML4 tabelu stranica. Odavde kreće mapiranje VA u PA.
 	// ili na PML5 base address when 5-Level paging is enabled (CR4[LA57]=1)
@@ -318,9 +356,6 @@ int load_guest_image(struct vm *v, const char *image_path, uint64_t load_addr) {
 // #define MEM_SIZE (2u * 1024u * 1024u) // Veličina memorije će biti 2MB
 
 
-int GUEST_IMG = FALSE;
-size_t MEM_SIZE = FALSE; // 2 4 8 MB
-int PAGE_SIZE = FALSE; // 2MB or 4KB
 int parse_arguments(int argc, char *argv[]){
 	for(int i = 1; i < argc; i++){
 		char* param = argv[i];
@@ -377,9 +412,10 @@ int parse_arguments(int argc, char *argv[]){
 		printf("not enough arguments\n");
 		return -1;
 	}
-	printf("MEM_SIZE = %lx \n", MEM_SIZE);
-	printf("PAGE_SIZE = %d \n", PAGE_SIZE);
-	printf("GUEST_IMAGE = %s \n", argv[GUEST_IMG]);
+	LOG(printf("MEM_SIZE = %lx \n", MEM_SIZE));
+	LOG(printf("PAGE_SIZE = %d \n", PAGE_SIZE));
+	LOG(printf("GUEST_IMAGE = %s \n", argv[GUEST_IMG]));
+	
 }
 
 int main(int argc, char *argv[])
@@ -387,7 +423,7 @@ int main(int argc, char *argv[])
 	if(parse_arguments(argc, argv) < 0){
 		return -1;
 	}
-
+	
 	struct vm v;
 	struct kvm_sregs sregs; // specijalni registri
 	struct kvm_regs regs; // registri
@@ -411,7 +447,7 @@ int main(int argc, char *argv[])
 		vm_destroy(&v);
 		return 1;
 	}
-
+	
 	setup_long_mode(&v, &sregs);
 	// postavljanje sregs
   if (ioctl(v.vcpu_fd, KVM_SET_SREGS, &sregs) < 0) {
@@ -432,7 +468,10 @@ int main(int argc, char *argv[])
 	// PC se preko pt[0] ulaza mapira na fizičku adresu GUEST_START_ADDR (0x8000).
 	// a na GUEST_START_ADDR je učitan gost program.
 	regs.rip = 0; 
-	regs.rsp = 2 << 20; // SP raste nadole, slika se u poslednji ulaz jer je adresa iza poslednje
+	// Posto 
+	regs.rsp = (MEM_SIZE-page_tables_sz); // SP raste nadole
+	LOG(printf("rsp = %#llx\n", regs.rsp));
+	
 
 	if (ioctl(v.vcpu_fd, KVM_SET_REGS, &regs) < 0) {
 		perror("KVM_SET_REGS");
@@ -450,9 +489,15 @@ int main(int argc, char *argv[])
 
 		switch (v.run->exit_reason) {
 			case KVM_EXIT_IO:
-				if (v.run->io.direction == KVM_EXIT_IO_OUT && v.run->io.port == 0xE9) {
+				if (v.run->io.direction == KVM_EXIT_IO_OUT && v.run->io.port == IO_PORT) {
 					char *p = (char *)v.run;
 					printf("%c", *(p + v.run->io.data_offset));
+				}else if(v.run->io.direction == KVM_EXIT_IO_IN && v.run->io.port == IO_PORT){
+					char c = getchar();
+					char *p = (char *)v.run;
+					*(p + v.run->io.data_offset) = c;
+				}else{
+					printf("KVM_EXIT_IO unknown reason\n");
 				}
 				continue;
 			case KVM_EXIT_HLT:
