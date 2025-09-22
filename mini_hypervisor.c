@@ -25,7 +25,7 @@
 #define TRUE 1
 #define FALSE 0
 
-uint64_t GUEST_START_ADDR = 0x0; // Početna adresa za učitavanje gosta
+uint64_t GUEST_START_ADDR = 0x1000; // Početna adresa za učitavanje gosta
 #define ENABLE_LOG 0
 
 #if ENABLE_LOG
@@ -57,7 +57,7 @@ struct vm {
 	struct kvm_run *run;
 	int run_mmap_size;
 };
-static int regionCnt = 0;
+
 int vm_init(struct vm *v, size_t mem_size)
 {
 	struct kvm_userspace_memory_region region;	
@@ -244,12 +244,8 @@ static void setup_long_mode(struct vm *v, struct kvm_sregs *sregs)
 		uint64_t pt_addr = (pd_addr-0x1000*pt_cnt);
 		uint64_t *pt = (void *)(v->mem + pt_addr); //  pokazivac na memoriju gde ce biti tabela 1
 
-
-		
 		page_tables_sz = MEM_SIZE - pt_addr;
 		LOG(printf("page_tables_sz = %#lx\n", page_tables_sz));
-		
-
 
 		for(int i = 0; i < pt_cnt; i++){
 			pd[i] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pt_addr ;
@@ -442,11 +438,12 @@ static void* hypervisor_thread(void* guest_img_name){
 	
 	// PC se preko pt[0] ulaza mapira na fizičku adresu GUEST_START_ADDR (0x8000).
 	// a na GUEST_START_ADDR je učitan gost program.
-	regs.rip = 0; 
+	regs.rip = 0x1000; 
 	// Posto 
 	regs.rsp = (MEM_SIZE-page_tables_sz); // SP raste nadole
 	LOG(printf("rsp = %#llx\n", regs.rsp));
-	
+	 
+	strcpy(v.mem,"Poruka od hipervizora :)\n");
 
 	if (ioctl(v.vcpu_fd, KVM_SET_REGS, &regs) < 0) {
 		perror("KVM_SET_REGS");
@@ -520,7 +517,7 @@ int main(int argc, char *argv[])
   }
   free(threads);
 
-  printf("Sve %d niti su završile.\n", N);
+  // printf("Sve %d niti su završile.\n", N);
 
 	
 }
