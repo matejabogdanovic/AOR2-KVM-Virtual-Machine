@@ -422,10 +422,10 @@ int handleFileOP(struct vm* v){
 
 	char *p = (char *)v->run;
 	uint8_t op = *(p + v->run->io.data_offset);
-	printf("OP: %c", '0'+op);
+	printf("OP: %c======================\n", '0'+op);
 
 	uint8_t c = 1;
-	uint8_t fhandle = 1;
+	uint32_t fhandle = 1;
 	switch (op)
 	{
 	case FOPEN:
@@ -457,32 +457,78 @@ int handleFileOP(struct vm* v){
 		fhandle = BUFFER;// prosledi fhandle
 		printf("fhandle %d \n", fhandle);
 		IFRUN
-		printf("dir %d \n", v->run->io.direction);
+
 		BUFFER = STATUS_VALID; // status da li smem da radim operaciju
 	
 	
 		while (1){
 			
 			IFRUN	
-			printf("dir %d \n", v->run->io.direction);
+
 			if(v->run->io.direction == KVM_EXIT_IO_OUT){
 				printf("kraj\n");
 				break;
 			}	
-				printf("next\n");
-				
 			BUFFER = '?';
 			IFRUN
 			BUFFER = STATUS_VALID;
 		}
 
 	break;
+	case FWRITE:
+		
+		IFRUN
+		fhandle = BUFFER;// prosledi fhandle
+		printf("fhandle %d \n", fhandle);
+		IFRUN
+
+		BUFFER = STATUS_VALID; // status da li smem da radim operaciju
+	
+	
+		while (1){
+			
+			IFRUN	
+
+			if(v->run->io.direction == KVM_EXIT_IO_IN){
+				printf("\nkraj\n");
+				break;
+			}			
+			printf("%c", BUFFER);
+			IFRUN
+			BUFFER = STATUS_VALID;
+		}
+
+	break;
+	case FSEEK:
+		IFRUN
+		fhandle = BUFFER;// prosledi fhandle
+		printf("fhandle %d \n", fhandle);
+		IFRUN
+
+		BUFFER = STATUS_VALID; // status da li smem da radim operaciju
+
+		IFRUN
+		printf("offset %d\n", BUFFER);
+		IFRUN
+		printf("position %d\n", BUFFER);
+		IFRUN
+		BUFFER = 5;
+	break;
+
+	case FCLOSE:
+		IFRUN
+		fhandle = BUFFER;// prosledi fhandle
+		printf("fhandle %d \n", fhandle);
+		IFRUN
+
+		BUFFER = STATUS_VALID; // status da li smem da radim operaciju
+	break;
 	default:
 		printf("Unknown file operation %d", op);
 		return -1;
 		
 	}
-	
+
 	return 0;
 }
 
@@ -553,7 +599,7 @@ static void* hypervisor_thread(void* guest_img_name){
 				if(v.run->io.port == PORT_IO){
 					if (v.run->io.direction == KVM_EXIT_IO_OUT ) {
 						char *p = (char *)v.run;
-						printf("%c", *(p + v.run->io.data_offset));
+						printf("------USER SAYS: %c\n", *(p + v.run->io.data_offset));
 					}else if(v.run->io.direction == KVM_EXIT_IO_IN){
 						char c = getchar();
 						char *p = (char *)v.run;

@@ -3,6 +3,17 @@
 uint16_t PORT_IO = 0xE9;
 uint16_t PORT_FILE = 0x0278;
 
+static void outl(uint32_t value, uint16_t port)
+{
+  asm volatile("outl %0,%1" : /* dest */ : "a" (value), "Nd" (port) : "memory");
+}
+
+static uint32_t inl(uint16_t port)
+{
+  uint32_t result = 0;
+  asm volatile("inl %1,%0" : "=a" (result) : "Nd" (port) : "memory");
+  return result;
+}
 
 static void outb(uint8_t value, uint16_t port) {
 	asm volatile ("outb %0,%1" : /* dest */ : "a" (value), "Nd" (port) : "memory");
@@ -36,6 +47,7 @@ void kvm_putc(char c){
 #define FWRITE 3
 #define FSEEK 4
 #define FCLOSE 5
+
 // @returns 0 if ok
 int kvm_fopen(const char* fname, const char* rwa){
 	outb(FOPEN, PORT_FILE); // 1 je fopen
@@ -51,12 +63,12 @@ int kvm_fopen(const char* fname, const char* rwa){
 	// kraj prava pristupa
 	outb(EOS, PORT_FILE);
 	// dohvati fhandle
-	return inb(PORT_FILE); 
+	return inl(PORT_FILE); 
 }
 
 int kvm_fread(int f, void* buffer, unsigned long size, unsigned long len){
 	outb(FREAD, PORT_FILE); // 2 je fread
-	outb(f, PORT_FILE); // prosledi fhandle
+	outl(f, PORT_FILE); // prosledi fhandle
 	if(inb(PORT_FILE) == STATUS_INVALID)return -1; // status da li smem da radim operaciju
 
 	uint8_t c = 0; 
@@ -81,7 +93,7 @@ int kvm_fread(int f, void* buffer, unsigned long size, unsigned long len){
 
 int kvm_fwrite(int f, void* buffer, unsigned long size, unsigned long len){
 	outb(FWRITE, PORT_FILE); // 3 je fwrite
-	outb(f, PORT_FILE); // prosledi fhandle
+	outl(f, PORT_FILE); // prosledi fhandle
 	if(inb(PORT_FILE) == STATUS_INVALID)return -1; // status da li smem da radim operaciju
 
 	uint8_t status = 0; 

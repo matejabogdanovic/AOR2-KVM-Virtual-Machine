@@ -7,7 +7,7 @@ __attribute__((section(".start")))
 _start(void) {
 	const char *p;
 
-	int fhandle = kvm_fopen("file", "rwe");
+	int fhandle = kvm_fopen("file", "rwa");
 	kvm_putc('0'+fhandle);
 	char buffer[3] = {'e', 'e', 'e'};
 	int ret = kvm_fread(fhandle, buffer, sizeof(char), 3);
@@ -15,7 +15,7 @@ _start(void) {
 
 	for (int i = 0; i < 3; i++)
 	{
-		kvm_putc(buffer[i]);
+		kvm_putc(buffer[i]++);
 	}
 	kvm_fwrite(fhandle, buffer, sizeof(char), 3);
 	kvm_putc('0'+kvm_fseek(fhandle, 1, KVM_SEEK_CUR));
