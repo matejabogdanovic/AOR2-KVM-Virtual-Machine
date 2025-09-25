@@ -1,3 +1,5 @@
+
+
 #include <stdint.h>
 uint16_t PORT_IO = 0xE9;
 
@@ -22,9 +24,14 @@ __attribute__((section(".start")))
 _start(void) {
 	const char *p;
 
-	print("Hello, from 1!");
+	print("Upisi slovo: ");
 	uint8_t c = inb(PORT_IO);
+	print("Echo: ");
 	outb(c, PORT_IO);
+	c = inb(PORT_IO);
+	outb(c, PORT_IO); // print '\n' from console
+
+
 
 	for (;;)
 		asm("hlt");

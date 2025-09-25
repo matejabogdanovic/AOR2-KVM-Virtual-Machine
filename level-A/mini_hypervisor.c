@@ -20,12 +20,12 @@
 #include <string.h>
 #include <stdint.h>
 #include <linux/kvm.h>
-#include <pthread.h>
+
 
 #define TRUE 1
 #define FALSE 0
 
-uint64_t GUEST_START_ADDR = 0x1000; // Početna adresa za učitavanje gosta
+uint64_t GUEST_START_ADDR = 0x0; // Početna adresa za učitavanje gosta
 #define ENABLE_LOG 0
 
 #if ENABLE_LOG
@@ -200,8 +200,8 @@ static void setup_segments_64(struct kvm_sregs *sregs)
 
 
 #define IO_PORT 0xE9
-int GUEST_IMG_START = FALSE;
-int GUEST_IMG_END = FALSE;
+int GUEST_IMG = FALSE;
+
 size_t MEM_SIZE = FALSE; // 2 or 4 or 8 MB
 int PAGE_SIZE = FALSE; // 2(MB) or 4(KB)
 size_t page_tables_sz = 0;
@@ -328,11 +328,9 @@ int load_guest_image(struct vm *v, const char *image_path, uint64_t load_addr) {
 
 
 int parse_arguments(int argc, char *argv[]){
-	int guest_command_start = FALSE;
-	for(int i = 1; i < argc; i++){
+for(int i = 1; i < argc; i++){
 		char* param = argv[i];
 		if(!strcmp(param, "--memory") || !strcmp(param, "-m")){
-			guest_command_start = FALSE;
 			if(MEM_SIZE){
 				printf("invalid arguments: memory size already defined\n");
 				return -1;
@@ -349,7 +347,6 @@ int parse_arguments(int argc, char *argv[]){
 			MEM_SIZE = (mem_sz_in_mb * 1024 * 1024);
 
 		}else if(!strcmp(param, "--page") || !strcmp(param, "-p")){
-			guest_command_start = FALSE;
 			if(PAGE_SIZE){
 				printf("invalid arguments: page size already defined\n");
 				return -1;
@@ -365,41 +362,41 @@ int parse_arguments(int argc, char *argv[]){
 			}
 			
 		}else if(!strcmp(param, "--guest") || !strcmp(param, "-g")){
-			if(GUEST_IMG_START){
+			if(GUEST_IMG){
 				printf("invalid arguments: guest image already defined\n");
 				return -1;
 			}
-			guest_command_start = TRUE;
 			if(argc <= i+1){
 				printf("not enough arguments\n");
 				return -1;
 			}
-			GUEST_IMG_START = GUEST_IMG_END = ++i;
+			GUEST_IMG = ++i;
 		}
 		else{
-			if(guest_command_start == FALSE){
-				printf("unknown argument: %s\n", param);
-				return -1;
-			}
-			GUEST_IMG_END = i;
+			
+			printf("unknown argument: %s\n", param);
+			return -1;
 	
 		}
 	}
-	if(MEM_SIZE==FALSE || PAGE_SIZE==FALSE || GUEST_IMG_START==FALSE){
+	if(MEM_SIZE==FALSE || PAGE_SIZE==FALSE || GUEST_IMG==FALSE){
 		printf("not enough arguments\n");
 		return -1;
 	}
-	LOG(printf("MEM_SIZE = %lx \n", MEM_SIZE));
-	LOG(printf("PAGE_SIZE = %d \n", PAGE_SIZE));
-	
-	for(int i = GUEST_IMG_START; i <= GUEST_IMG_END; i++){
-		LOG(printf("GUEST_IMAGE = %s \n", argv[i]));
-	}
-	
+	printf("MEM_SIZE = %lx \n", MEM_SIZE);
+	printf("PAGE_SIZE = %d \n", PAGE_SIZE);
+	printf("GUEST_IMAGE = %s \n", argv[GUEST_IMG]);
 }
 
-static void* hypervisor_thread(void* guest_img_name){
+
+int main(int argc, char *argv[])
+{
+	if(parse_arguments(argc, argv) < 0){
+		return -1;
+	}
 	
+
+  
 	struct vm v;
 	struct kvm_sregs sregs; // specijalni registri
 	struct kvm_regs regs; // registri
@@ -427,7 +424,7 @@ static void* hypervisor_thread(void* guest_img_name){
 		return 0;
 	}
 	// ucitavanje img
-	if (load_guest_image(&v, (const char*)guest_img_name, GUEST_START_ADDR) < 0) {
+	if (load_guest_image(&v, argv[GUEST_IMG], GUEST_START_ADDR) < 0) {
 		printf("Failed to load guest image\n");
 		vm_destroy(&v);
 		return 0;
@@ -436,14 +433,14 @@ static void* hypervisor_thread(void* guest_img_name){
 	memset(&regs, 0, sizeof(regs));
 	regs.rflags = 0x2;
 	
-	// PC se preko pt[0] ulaza mapira na fizičku adresu GUEST_START_ADDR (0x8000).
+	// PC se preko pt[0] ulaza mapira na fizičku adresu GUEST_START_ADDR (0x0).
 	// a na GUEST_START_ADDR je učitan gost program.
-	regs.rip = 0x1000; 
-	// Posto 
+	regs.rip = 0x0; 
+
 	regs.rsp = (MEM_SIZE-page_tables_sz); // SP raste nadole
 	LOG(printf("rsp = %#llx\n", regs.rsp));
 	 
-	strcpy(v.mem,"Poruka od hipervizora :)\n");
+	// strcpy(v.mem,"Poruka od hipervizora :)\n");
 
 	if (ioctl(v.vcpu_fd, KVM_SET_REGS, &regs) < 0) {
 		perror("KVM_SET_REGS");
@@ -487,37 +484,6 @@ static void* hypervisor_thread(void* guest_img_name){
   	}
 
 	vm_destroy(&v);
-}
-
-int main(int argc, char *argv[])
-{
-	if(parse_arguments(argc, argv) < 0){
-		return -1;
-	}
-	int N = GUEST_IMG_END - GUEST_IMG_START + 1;
-	pthread_t *threads = malloc(N * sizeof(pthread_t));
-  
-  if (!threads) {
-      perror("malloc");
-      return -1;
-  }
-  
-  for (int i = 0; i < N; i++) {
-      
-      if (pthread_create(&threads[i], NULL, &hypervisor_thread, argv[GUEST_IMG_START+i]) != 0) {
-          perror("pthread_create");
-          free(threads);
-         
-          return -1;
-      }
-  }
-  
-  for (int i = 0; i < N; i++) {
-      pthread_join(threads[i], NULL);
-  }
-  free(threads);
-
-  // printf("Sve %d niti su završile.\n", N);
 
 	
 }

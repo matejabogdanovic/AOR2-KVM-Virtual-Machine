@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PROGRAM="../../mini_hypervisor" 
+PROGRAM="../../level-B/mini_hypervisor" 
 
 gcc -m64 -ffreestanding -fno-pic -c -o guest1.o guest1.c
 gcc -m64 -ffreestanding -fno-pic -c -o guest2.o guest2.c

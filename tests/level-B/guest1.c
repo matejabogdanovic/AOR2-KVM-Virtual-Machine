@@ -1,5 +1,3 @@
-
-
 #include <stdint.h>
 uint16_t PORT_IO = 0xE9;
 
@@ -24,16 +22,13 @@ __attribute__((section(".start")))
 _start(void) {
 	const char *p;
 
-	print("Upisi slovo: ");
-	uint8_t c = inb(PORT_IO);
-	print("Echo: ");
-	outb(c, PORT_IO);
-	print("\n");
+	print("Type 'm': ");
+	uint8_t c = 0;
+	while ((c = inb(PORT_IO))!='m'){}
 
 	for (uint8_t* i = 0; *i != 0; ++i)
 		outb(*(i), PORT_IO);
-
-
+	
 	for (;;)
 		asm("hlt");
 }

@@ -21,8 +21,9 @@ __attribute__((noreturn))
 __attribute__((section(".start")))
 _start(void) {
 	const char *p;
-
-	print("Hello, from 2!");
+	
+	inb(PORT_IO); // uhvatice \n iz konzole
+	print("12345678");
 
 
 
