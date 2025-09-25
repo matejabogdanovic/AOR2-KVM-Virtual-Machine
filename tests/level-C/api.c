@@ -63,16 +63,17 @@ int kvm_fread(int f, void* buffer, unsigned long size, unsigned long len){
 	uint8_t status = 0; 
 	uint8_t *dst = (uint8_t*)buffer;
 	unsigned long read = 0;
-	for ( read < len*size; read++;){
+	for ( ;read < len*size; read++){
 		c = inb(PORT_FILE); // probaj da procitas podatak
 		status = inb(PORT_FILE); // dohvati status procitanog podatka
 		if(status == STATUS_INVALID){ // nema vise podataka
+			outb(EOS, PORT_FILE);
 			return read;
 		}
 		dst[read] = c;
 		
 	}
-	
+	outb(EOS, PORT_FILE);
 	return read;
 }
 
@@ -86,16 +87,17 @@ int kvm_fwrite(int f, void* buffer, unsigned long size, unsigned long len){
 	uint8_t status = 0; 
 	uint8_t *src = (uint8_t*)buffer;
 	unsigned long written = 0;
-	for ( written < len*size; written++;){
+	for (; written < len*size; written++){
 
 		outb(src[written], PORT_FILE); // probaj da upises podatak
 		status = inb(PORT_FILE); // dohvati status upisanog podatka
 		if(status == STATUS_INVALID){ // ne moze da se upise
+			outb(EOS, PORT_FILE);
 			return written;
 		}
 		
 	}
-	
+	outb(EOS, PORT_FILE);
 	return written;
 }
 #define KVM_SEEK_END 1 // It denotes the end of the file.

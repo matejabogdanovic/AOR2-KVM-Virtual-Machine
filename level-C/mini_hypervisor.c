@@ -405,6 +405,7 @@ uint16_t PORT_FILE = 0x0278;
 #define STATUS_INVALID 1
 #define STATUS_VALID 0
 #define EOS 0
+#define NOOP 0
 #define FOPEN 1
 #define FREAD 2
 #define FWRITE 3
@@ -414,6 +415,76 @@ uint16_t PORT_FILE = 0x0278;
 #define KVM_SEEK_END 1 // It denotes the end of the file.
 #define KVM_SEEK_SET 2 // It denotes starting of the file.
 #define KVM_SEEK_CUR 3 // It denotes the file pointer's current position. 
+
+#define IFRUN if(ioctl(v->vcpu_fd, KVM_RUN, 0)<0)return-1;
+#define BUFFER (*(p + v->run->io.data_offset))
+int handleFileOP(struct vm* v){
+
+	char *p = (char *)v->run;
+	uint8_t op = *(p + v->run->io.data_offset);
+	printf("OP: %c", '0'+op);
+
+	uint8_t c = 1;
+	uint8_t fhandle = 1;
+	switch (op)
+	{
+	case FOPEN:
+		// prosledi putanju
+		while (c != EOS){ // kraj putanje
+			IFRUN
+			c = BUFFER;
+			printf("%c", c);
+
+		}printf("\n");
+
+		c = 1; // reset 
+		// prava pristupa
+		while (c != EOS){ // kraj prava pristupa
+			IFRUN
+			c = BUFFER;
+			printf("%c", c);	
+		}printf("\n");
+
+		// dohvati fhandle
+		IFRUN
+		BUFFER = 3;
+		
+		break;
+	
+	case FREAD:
+		
+		IFRUN
+		fhandle = BUFFER;// prosledi fhandle
+		printf("fhandle %d \n", fhandle);
+		IFRUN
+		printf("dir %d \n", v->run->io.direction);
+		BUFFER = STATUS_VALID; // status da li smem da radim operaciju
+	
+	
+		while (1){
+			
+			IFRUN	
+			printf("dir %d \n", v->run->io.direction);
+			if(v->run->io.direction == KVM_EXIT_IO_OUT){
+				printf("kraj\n");
+				break;
+			}	
+				printf("next\n");
+				
+			BUFFER = '?';
+			IFRUN
+			BUFFER = STATUS_VALID;
+		}
+
+	break;
+	default:
+		printf("Unknown file operation %d", op);
+		return -1;
+		
+	}
+	
+	return 0;
+}
 
 static void* hypervisor_thread(void* guest_img_name){
 	
@@ -468,6 +539,7 @@ static void* hypervisor_thread(void* guest_img_name){
 	}
 
 	// hipervizor
+	
 	while(stop == 0) {
 		ret = ioctl(v.vcpu_fd, KVM_RUN, 0);
 		if (ret == -1) {
@@ -475,7 +547,7 @@ static void* hypervisor_thread(void* guest_img_name){
 			vm_destroy(&v);
 			return 0;
 		}
-
+		
 		switch (v.run->exit_reason) {
 			case KVM_EXIT_IO:
 				if(v.run->io.port == PORT_IO){
@@ -490,11 +562,16 @@ static void* hypervisor_thread(void* guest_img_name){
 						printf("KVM_EXIT_IO not io_in nor ion_out\n");
 					}
 				}else if(v.run->io.port == PORT_FILE){
-
+					// FILE OPERATIONS - not user thread safe
 					if (v.run->io.direction == KVM_EXIT_IO_OUT ) {
-						char *p = (char *)v.run;
-						uint8_t c = *(p + v.run->io.data_offset);
-						printf("%c", c);
+
+						
+						if(handleFileOP(&v) < 0){
+							printf("KVM_RUN failed\n");
+							vm_destroy(&v);
+							return 0;
+						} 
+					
 					}else if(v.run->io.direction == KVM_EXIT_IO_IN){
 						char *p = (char *)v.run;
 						*(p + v.run->io.data_offset) = STATUS_INVALID;

@@ -9,6 +9,15 @@ _start(void) {
 
 	int fhandle = kvm_fopen("file", "rwe");
 	kvm_putc('0'+fhandle);
+	char buffer[3] = {'e', 'e', 'e'};
+	int ret = kvm_fread(fhandle, buffer, sizeof(char), 3);
+	kvm_putc('0'+ret);
+	kvm_putc('\n');
+	for (int i = 0; i < 3; i++)
+	{
+		kvm_putc(buffer[i]);
+	}
+	
 	// kvm_print("Type 'm': ");
 	// uint8_t c = 0;
 	// while ((c = kvm_getc())!='m'){}
