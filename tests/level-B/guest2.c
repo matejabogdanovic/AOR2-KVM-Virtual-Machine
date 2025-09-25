@@ -22,7 +22,7 @@ __attribute__((section(".start")))
 _start(void) {
 	const char *p;
 	
-	inb(PORT_IO); // uhvatice \n iz konzole
+	inb(PORT_IO); 
 	print("12345678");
 
 
