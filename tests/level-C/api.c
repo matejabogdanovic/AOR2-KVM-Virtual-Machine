@@ -92,12 +92,12 @@ int kvm_fwrite(int f, void* buffer, unsigned long size, unsigned long len){
 		outb(src[written], PORT_FILE); // probaj da upises podatak
 		status = inb(PORT_FILE); // dohvati status upisanog podatka
 		if(status == STATUS_INVALID){ // ne moze da se upise
-			outb(EOS, PORT_FILE);
+			inb(PORT_FILE);
 			return written;
 		}
 		
 	}
-	outb(EOS, PORT_FILE);
+	inb(PORT_FILE);
 	return written;
 }
 #define KVM_SEEK_END 1 // It denotes the end of the file.
