@@ -43,13 +43,22 @@ void kvm_putc(char c){
 #define STATUS_VALID 0
 #define EOS 0
 #define FOPEN 1
+#define FOPEN_MAX_PATHSIZE 256
 #define FREAD 2
 #define FWRITE 3
 #define FSEEK 4
 #define FCLOSE 5
 
+#define KVM_FILE_READ 1 
+#define KVM_FILE_WRITE 2 
+#define KVM_FILE_RW 3 
 // @returns 0 if ok
-int kvm_fopen(const char* fname, const char* rwa){
+int kvm_fopen(const char* fname, int access){
+	if(access != KVM_FILE_READ && access != KVM_FILE_WRITE && access != KVM_FILE_RW)
+		return -1;
+	if(sizeof(fname) > FOPEN_MAX_PATHSIZE)
+		return -1;
+
 	outb(FOPEN, PORT_FILE); // 1 je fopen
 
 	// prosledi putanju
@@ -58,10 +67,9 @@ int kvm_fopen(const char* fname, const char* rwa){
 	// kraj putanje
 	outb(EOS, PORT_FILE);
 	// prava pristupa
-	for (; *rwa; ++rwa)
-		outb(*rwa, PORT_FILE);
-	// kraj prava pristupa
-	outb(EOS, PORT_FILE);
+	
+	outb(access, PORT_FILE);
+
 	// dohvati fhandle
 	return inl(PORT_FILE); 
 }

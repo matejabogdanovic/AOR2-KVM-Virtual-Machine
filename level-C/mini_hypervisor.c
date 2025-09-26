@@ -22,11 +22,13 @@
 #include <linux/kvm.h>
 #include <pthread.h>
 
+pthread_mutex_t global_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 #define TRUE 1
 #define FALSE 0
 
 uint64_t GUEST_START_ADDR = 0x1000; // Početna adresa za učitavanje gosta
-#define ENABLE_LOG 0
+#define ENABLE_LOG 1
 
 #if ENABLE_LOG
   #define LOG(x) x;
@@ -48,7 +50,37 @@ uint64_t GUEST_START_ADDR = 0x1000; // Početna adresa za učitavanje gosta
 #define EFER_LME (1u << 8)
 #define EFER_LMA (1u << 10)
 
+#define FOPEN_MAX_PATHSIZE 256
+#define OFT_SIZE 16
+#define GFT_SIZE 32
+
+typedef struct {
+	FILE* fd; // pravi fd
+	char path[FOPEN_MAX_PATHSIZE];
+
+	int access; // read = 1, write = 2, read-write = 3
+} file_desc;
+
+typedef struct {
+    file_desc fdesc;       // pokazuje na fizicki fajl
+    // unsigned long  cursor;        // zajednicki kursor
+    int flags;
+    int ref_count;
+} GlobalFileEntry;
+
+typedef struct {
+    GlobalFileEntry* gfe; // pokazivac na globalni objekat
+    int flags;
+    unsigned long cursor;     
+		int access; // read = 1, write = 2, read-write = 3   
+} LocalFileEntry;
+
+// globalna tabela u kojoj se nalaze informacije o fajlovima
+// sa svih virtualnih masina
+GlobalFileEntry gft[GFT_SIZE];
+uint32_t g_free_bitmap = 0xffffffff; // 1 - slobodno, 0 - zauzet ulaz
 struct vm {
+	int id;
 	int kvm_fd;
 	int vm_fd;
 	int vcpu_fd;
@@ -56,7 +88,34 @@ struct vm {
 	size_t mem_size;
 	struct kvm_run *run;
 	int run_mmap_size;
+	// lokalna file tabela u kojoj se nalaze
+	// fajlovi koje lokalno otvara jedna VM
+	LocalFileEntry oft[OFT_SIZE];
+	uint16_t free_bitmap; // 1 - slobodno, 0 - zauzet ulaz
+
 };
+
+
+
+int g_find_free_entry(uint32_t bitmap){
+	if(bitmap == 0)return -1;
+	uint32_t mask = 0x1;
+	for (int i = 0; i < 32; i++){
+		if(bitmap & mask)return i;
+		bitmap = bitmap >> 1;
+	}
+	return -1; // won't happen
+}
+
+int find_free_entry(int16_t bitmap){
+	if(bitmap == 0)return -1;
+	int16_t mask = 0x1;
+	for (int i = 0; i < 16; i++){
+		if(bitmap & mask)return i;
+		bitmap = bitmap >> 1;
+	}
+	return -1; // won't happen
+}
 
 int vm_init(struct vm *v, size_t mem_size)
 {
@@ -203,6 +262,8 @@ static void setup_segments_64(struct kvm_sregs *sregs)
 
 int GUEST_IMG_START = FALSE;
 int GUEST_IMG_END = FALSE;
+int SHARED_FILES_START = FALSE;
+int SHARED_FILES_END = FALSE;
 size_t MEM_SIZE = FALSE; // 2 or 4 or 8 MB
 int PAGE_SIZE = FALSE; // 2(MB) or 4(KB)
 size_t page_tables_sz = 0;
@@ -330,10 +391,11 @@ int load_guest_image(struct vm *v, const char *image_path, uint64_t load_addr) {
 
 int parse_arguments(int argc, char *argv[]){
 	int guest_command_start = FALSE;
+	int file_command_start = FALSE;
 	for(int i = 1; i < argc; i++){
 		char* param = argv[i];
 		if(!strcmp(param, "--memory") || !strcmp(param, "-m")){
-			guest_command_start = FALSE;
+			guest_command_start = file_command_start =FALSE;
 			if(MEM_SIZE){
 				printf("invalid arguments: memory size already defined\n");
 				return -1;
@@ -350,7 +412,7 @@ int parse_arguments(int argc, char *argv[]){
 			MEM_SIZE = (mem_sz_in_mb * 1024 * 1024);
 
 		}else if(!strcmp(param, "--page") || !strcmp(param, "-p")){
-			guest_command_start = FALSE;
+			guest_command_start = file_command_start =FALSE;
 			if(PAGE_SIZE){
 				printf("invalid arguments: page size already defined\n");
 				return -1;
@@ -366,8 +428,9 @@ int parse_arguments(int argc, char *argv[]){
 			}
 			
 		}else if(!strcmp(param, "--guest") || !strcmp(param, "-g")){
+			file_command_start = FALSE;
 			if(GUEST_IMG_START){
-				printf("invalid arguments: guest image already defined\n");
+				printf("invalid arguments: guest images already defined\n");
 				return -1;
 			}
 			guest_command_start = TRUE;
@@ -376,13 +439,33 @@ int parse_arguments(int argc, char *argv[]){
 				return -1;
 			}
 			GUEST_IMG_START = GUEST_IMG_END = ++i;
+		}else if(!strcmp(param, "--file") || !strcmp(param, "-f")){
+			guest_command_start = FALSE;
+			if(SHARED_FILES_START){
+				printf("invalid arguments: shared files already defined\n");
+				return -1;
+			}
+			file_command_start = TRUE;
+			if(argc <= i+1){
+				printf("not enough arguments\n");
+				return -1;
+			}
+			SHARED_FILES_START = SHARED_FILES_END = ++i;
 		}
 		else{
-			if(guest_command_start == FALSE){
+			if(guest_command_start == FALSE && file_command_start == FALSE){
 				printf("unknown argument: %s\n", param);
 				return -1;
 			}
-			GUEST_IMG_END = i;
+			if(guest_command_start == TRUE){
+				GUEST_IMG_END = i;
+				continue;
+			}
+			if(file_command_start == TRUE){
+				SHARED_FILES_END = i;
+				continue;
+			}
+			
 	
 		}
 	}
@@ -396,8 +479,12 @@ int parse_arguments(int argc, char *argv[]){
 	for(int i = GUEST_IMG_START; i <= GUEST_IMG_END; i++){
 		LOG(printf("GUEST_IMAGE = %s \n", argv[i]));
 	}
-	
+	for(int i = SHARED_FILES_START; i <= SHARED_FILES_END; i++){
+		LOG(printf("SHARED_FILE = %s \n", argv[i]));
+	}
 }
+
+
 
 uint16_t PORT_IO = 0xE9;
 uint16_t PORT_FILE = 0x0278;
@@ -407,6 +494,7 @@ uint16_t PORT_FILE = 0x0278;
 #define EOS 0
 #define NOOP 0
 #define FOPEN 1
+
 #define FREAD 2
 #define FWRITE 3
 #define FSEEK 4
@@ -416,9 +504,81 @@ uint16_t PORT_FILE = 0x0278;
 #define KVM_SEEK_SET 2 // It denotes starting of the file.
 #define KVM_SEEK_CUR 3 // It denotes the file pointer's current position. 
 
+#define KVM_FILE_READ 1 
+#define KVM_FILE_WRITE 2 
+#define KVM_FILE_RW 3 
 #define IFRUN if(ioctl(v->vcpu_fd, KVM_RUN, 0)<0)return-1;
 #define BUFFER (*(p + v->run->io.data_offset))
-int handleFileOP(struct vm* v){
+
+int open_shared_file(struct vm* v, char* fname, int access){
+	LOG(printf("open shared -> %s id -> %d \n", fname, v->id););
+
+	int oft_entry = find_free_entry(v->free_bitmap);
+	if(oft_entry < 0){
+		printf("No more space to open files.");
+		return -1;
+	}
+	
+	
+	pthread_mutex_lock(&global_mutex);
+	// probaj da nadjes fajl da li je otvoren
+	uint32_t tmp = g_free_bitmap;	
+	uint32_t mask = 0x1;
+	for (int i = 0; i < GFT_SIZE; i++){
+		
+		if((tmp&mask) == 0){
+			GlobalFileEntry* e = &gft[i];
+			
+			if(!strcmp(e->fdesc.path, fname)){
+				LOG(printf("File already open -> %s\n", e->fdesc.path));
+				// todo
+				v->free_bitmap &= ~(1 << oft_entry); // zauzmi mesto u lokalnoj tabeli
+				pthread_mutex_unlock(&global_mutex);
+				return 0;
+			}
+		}
+		tmp = tmp >> 1;
+	}
+	FILE *fp;
+
+  
+  fp = fopen(fname, "r+"); // citanje pisanje kreiranje ne
+	if (fp == NULL) {
+		pthread_mutex_unlock(&global_mutex);
+    perror("shared fopen");
+		
+    return -1;
+  }
+	
+	int gft_entry = g_find_free_entry(g_free_bitmap);
+	if(gft_entry < 0){
+		pthread_mutex_unlock(&global_mutex);
+		printf("No more space to open GLOBAL files.");
+		
+		return -1;
+	}
+
+	g_free_bitmap &= ~(1 << gft_entry);// zauzmi mesto u globalnoj tabeli
+
+	gft[gft_entry].fdesc.fd = fp;
+	gft[gft_entry].flags = KVM_FILE_RW; // uvek su za citanje i upis dozvoljeni
+	gft[gft_entry].ref_count = 1;
+	strcpy(gft[gft_entry].fdesc.path, fname);
+	
+	pthread_mutex_unlock(&global_mutex);
+
+	v->free_bitmap &= ~(1 << oft_entry); // zauzmi mesto u lokalnoj tabeli
+	v->oft[oft_entry].cursor = 0;
+	v->oft[oft_entry].gfe = &gft[gft_entry];
+	v->oft[oft_entry].access = access;
+
+
+
+	return oft_entry;
+}
+
+
+int handleFileOP(struct vm* v, char*** argv){
 
 	char *p = (char *)v->run;
 	uint8_t op = *(p + v->run->io.data_offset);
@@ -426,28 +586,44 @@ int handleFileOP(struct vm* v){
 
 	uint8_t c = 1;
 	uint32_t fhandle = 1;
+
+char buffer[FOPEN_MAX_PATHSIZE];
+  	int len = 0;
 	switch (op)
 	{
 	case FOPEN:
 		// prosledi putanju
-		while (c != EOS){ // kraj putanje
+		
+		while (c != EOS && len < FOPEN_MAX_PATHSIZE-1){ // kraj putanje
 			IFRUN
 			c = BUFFER;
-			printf("%c", c);
-
-		}printf("\n");
-
-		c = 1; // reset 
-		// prava pristupa
-		while (c != EOS){ // kraj prava pristupa
-			IFRUN
-			c = BUFFER;
-			printf("%c", c);	
-		}printf("\n");
-
-		// dohvati fhandle
+			buffer[len++]=c;
+		}
+		buffer[len]='\0';
+		printf("path: %s \n", buffer);
+		
+				
 		IFRUN
-		BUFFER = 3;
+		c = BUFFER;
+		printf("access: %x \n", c);	
+
+
+		for (int i = SHARED_FILES_START; i <= SHARED_FILES_END; i++)
+		{
+			if(!strcmp((*argv)[i], buffer)){ // want's to open shared file
+				
+				int fd = open_shared_file(v, (*argv)[i], c);
+				// dohvati fhandle
+				IFRUN
+				BUFFER = fd;
+
+				break;
+			}
+		}
+		
+		
+
+
 		
 		break;
 	
@@ -532,7 +708,15 @@ int handleFileOP(struct vm* v){
 	return 0;
 }
 
-static void* hypervisor_thread(void* guest_img_name){
+typedef struct thread_args {
+    int id;
+    char*** argv;
+} thread_args;
+
+
+
+static void* hypervisor_thread(void* args){
+	thread_args *targs = (thread_args*) args;
 	
 	struct vm v;
 	struct kvm_sregs sregs; // specijalni registri
@@ -560,8 +744,9 @@ static void* hypervisor_thread(void* guest_img_name){
 		vm_destroy(&v);
 		return 0;
 	}
+	
 	// ucitavanje img
-	if (load_guest_image(&v, (const char*)guest_img_name, GUEST_START_ADDR) < 0) {
+	if (load_guest_image(&v, (const char*)((*targs->argv)[targs->id+GUEST_IMG_START]), GUEST_START_ADDR) < 0) {
 		printf("Failed to load guest image\n");
 		vm_destroy(&v);
 		return 0;
@@ -576,7 +761,14 @@ static void* hypervisor_thread(void* guest_img_name){
 	// Posto 
 	regs.rsp = (MEM_SIZE-page_tables_sz); // SP raste nadole
 	LOG(printf("rsp = %#llx\n", regs.rsp));
-	 
+	
+	v.id = targs->id;
+	LOG(printf("ID %d\n", v.id));
+	// init
+	v.free_bitmap = 0xffff;
+	
+
+
 	strcpy(v.mem,"Poruka od hipervizora :)\n");
 
 	if (ioctl(v.vcpu_fd, KVM_SET_REGS, &regs) < 0) {
@@ -612,7 +804,7 @@ static void* hypervisor_thread(void* guest_img_name){
 					if (v.run->io.direction == KVM_EXIT_IO_OUT ) {
 
 						
-						if(handleFileOP(&v) < 0){
+						if(handleFileOP(&v, targs->argv) < 0){
 							printf("KVM_RUN failed\n");
 							vm_destroy(&v);
 							return 0;
@@ -643,7 +835,7 @@ static void* hypervisor_thread(void* guest_img_name){
 				break;
     	}
   	}
-
+	free(targs);
 	vm_destroy(&v);
 }
 // Потребно је проширити верзију Б хипервизора додавањем функционалности рада са фајловима.
@@ -676,11 +868,20 @@ int main(int argc, char *argv[])
   }
   
   for (int i = 0; i < N; i++) {
-      
-      if (pthread_create(&threads[i], NULL, &hypervisor_thread, argv[GUEST_IMG_START+i]) != 0) {
+     
+			thread_args* ta = malloc(sizeof( thread_args));
+        if (!ta) 
+        {
+            perror("malloc");
+            return -1;
+        }
+			ta->id = i;
+			ta->argv = &argv;
+			
+      if (pthread_create(&threads[i], NULL, &hypervisor_thread, ta) != 0) {
           perror("pthread_create");
           free(threads);
-         
+					free(ta);
           return -1;
       }
   }

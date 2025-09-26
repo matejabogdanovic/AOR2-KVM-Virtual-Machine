@@ -7,8 +7,10 @@ __attribute__((section(".start")))
 _start(void) {
 	const char *p;
 
-	int fhandle = kvm_fopen("file", "rwa");
+	int fhandle = kvm_fopen("./files/file.txt", KVM_FILE_READ | KVM_FILE_WRITE);
+	int fhandle2 = kvm_fopen("./files/file.txt", KVM_FILE_READ | KVM_FILE_WRITE);
 	kvm_putc('0'+fhandle);
+	kvm_putc('0'+fhandle2);
 	char buffer[3] = {'e', 'e', 'e'};
 	int ret = kvm_fread(fhandle, buffer, sizeof(char), 3);
 	kvm_putc('0'+ret);

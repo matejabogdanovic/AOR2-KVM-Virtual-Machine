@@ -366,7 +366,7 @@ int parse_arguments(int argc, char *argv[]){
 			
 		}else if(!strcmp(param, "--guest") || !strcmp(param, "-g")){
 			if(GUEST_IMG_START){
-				printf("invalid arguments: guest image already defined\n");
+				printf("invalid arguments: guest images already defined\n");
 				return -1;
 			}
 			guest_command_start = TRUE;
