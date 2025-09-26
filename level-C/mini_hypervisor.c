@@ -70,7 +70,7 @@ typedef struct {
 
 typedef struct {
     GlobalFileEntry* gfe; // pokazivac na globalni objekat
-
+		int gft_entry_index;
     unsigned long cursor;     
 		int local_access; // read = 1, write = 2, read-write = 3   
 } LocalFileEntry;
@@ -545,6 +545,7 @@ int open_shared_file(struct vm* v, char* fname, int access){
 				v->oft[oft_entry].cursor = 0;
 				v->oft[oft_entry].gfe = &gft[i];
 				v->oft[oft_entry].local_access = access;
+				v->oft[oft_entry].gft_entry_index = i;
 				return 0;
 			}
 		}
@@ -583,7 +584,7 @@ int open_shared_file(struct vm* v, char* fname, int access){
 	v->oft[oft_entry].cursor = 0;
 	v->oft[oft_entry].gfe = &gft[gft_entry];
 	v->oft[oft_entry].local_access = access;
-
+	v->oft[oft_entry].gft_entry_index = gft_entry;
 
 
 	return oft_entry;
@@ -619,19 +620,84 @@ char buffer[FOPEN_MAX_PATHSIZE];
 		c = BUFFER;
 		printf("access: %x \n", c);	
 
-		int fd = -1;
-		for (int i = SHARED_FILES_START; i <= SHARED_FILES_END; i++)
+		// PROVERITI LOKALNE FAJLOVE PRVO, JEL OTVOREN TU
+		uint32_t tmp = v->free_bitmap;	
+		uint32_t mask = 0x1;
+		for (int i = 0; i < OFT_SIZE; i++){
+			if((tmp&mask) == 0){
+				LocalFileEntry* e = &v->oft[i];
+				
+				if(!strcmp(e->gfe->fdesc.path, buffer)){
+					LOG(printf("LOCAL file already open -> %s\n", e->gfe->fdesc.path));
+					// dohvati fhandle
+					IFRUN
+					BUFFER = i;
+					return 0;
+				}
+			}
+			tmp = tmp >> 1;
+		}
+		// PROVERA DELJENIH FAJLOVA
+		fhandle = -1;
+		int i = SHARED_FILES_START;
+		for ( ;i <= SHARED_FILES_END; i++)
 		{
 			if(!strcmp((*argv)[i], buffer)){ // want's to open shared file
-				
-				fd = open_shared_file(v, (*argv)[i], c);
-
+				fhandle = open_shared_file(v, (*argv)[i], c);
 				break;
 			}
 		}
+		// FAJL SE MORA OTVORITI LOKALNO SAMO AKO SMO GA MI NAPRAVILI
+		if(i>SHARED_FILES_END){
+			LOG(printf("file is local and is not opened\n"););
+			char buf2[FOPEN_MAX_PATHSIZE+4] = {0};
+			strcpy(buf2, buffer);
+			char str_id[10];
+  		sprintf(str_id, "%d", v->id);
+			strcat(buf2, str_id);
+
+			int oft_entry = find_free_entry(v->free_bitmap);
+			if(oft_entry < 0){
+				printf("No more space to open files.");
+				return -1;
+			}
+			pthread_mutex_lock(&global_mutex);
+			int gft_entry = g_find_free_entry(g_free_bitmap);
+			if(gft_entry < 0){
+				pthread_mutex_unlock(&global_mutex);
+				printf("No more space to open GLOBAL files.");
+				
+				return -1;
+			}
+			
+			
+			TAKE_BITMAP_ENTRY(g_free_bitmap, gft_entry);
+			gft[gft_entry].access = c; // postavi sebi file access
+			gft[gft_entry].ref_count = 1;
+			strcpy(gft[gft_entry].fdesc.path, buffer);
+			
+			pthread_mutex_unlock(&global_mutex);
+			
+			FILE* f = fopen(buf2, (c==KVM_FILE_READ?"r":(c==KVM_FILE_WRITE?"w":"w+")));
+			if(f==NULL){
+			
+				IFRUN
+				BUFFER = -1;
+				return 0;
+			}
+			gft[gft_entry].fdesc.fd = f;
+			// lokalno
+			TAKE_BITMAP_ENTRY(v->free_bitmap, oft_entry);
+			v->oft[oft_entry].cursor = 0;
+			v->oft[oft_entry].gfe = &gft[gft_entry];
+			v->oft[oft_entry].local_access = c;
+			v->oft[oft_entry].gft_entry_index = gft_entry;
+
+			fhandle = oft_entry;
+		}
 		// dohvati fhandle
 		IFRUN
-		BUFFER = fd;
+		BUFFER = fhandle;
 		
 		break;
 	
@@ -641,6 +707,12 @@ char buffer[FOPEN_MAX_PATHSIZE];
 		fhandle = BUFFER;// prosledi fhandle
 		printf("fhandle %d \n", fhandle);
 		IFRUN
+
+		if(fhandle >= OFT_SIZE){
+			BUFFER = STATUS_INVALID;
+			return 0;
+		}
+
 		// cemu sluzi global access polje??
 		if(IS_ENTRY_FREE(v->free_bitmap, fhandle)){
 			BUFFER = STATUS_INVALID;
@@ -690,6 +762,11 @@ char buffer[FOPEN_MAX_PATHSIZE];
 		printf("fhandle %d \n", fhandle);
 		IFRUN
 
+		if(fhandle >= OFT_SIZE){
+			BUFFER = STATUS_INVALID;
+			return 0;
+		}
+
 		if(IS_ENTRY_FREE(v->free_bitmap, fhandle)){
 			BUFFER = STATUS_INVALID;
 			return 0;
@@ -721,6 +798,12 @@ char buffer[FOPEN_MAX_PATHSIZE];
 		fhandle = BUFFER;// prosledi fhandle
 		printf("fhandle %d \n", fhandle);
 		IFRUN
+
+		if(fhandle >= OFT_SIZE){
+			BUFFER = STATUS_INVALID;
+			return 0;
+		}
+
 
 		if(IS_ENTRY_FREE(v->free_bitmap, fhandle)){
 			BUFFER = STATUS_INVALID;
@@ -790,8 +873,30 @@ char buffer[FOPEN_MAX_PATHSIZE];
 		fhandle = BUFFER;// prosledi fhandle
 		printf("fhandle %d \n", fhandle);
 		IFRUN
+		if(fhandle >= OFT_SIZE){
+			BUFFER = STATUS_INVALID;
+			return 0;
+		}
 
-		BUFFER = STATUS_VALID; // status da li smem da radim operaciju
+		if(IS_ENTRY_FREE(v->free_bitmap, fhandle)){ // vec zatvoren bar za mene
+			BUFFER = STATUS_INVALID;
+			return 0;
+		}
+
+		FREE_BITMAP_ENTRY(v->free_bitmap, fhandle);
+
+		pthread_mutex_lock(&global_mutex);  
+			
+		if((--v->oft[fhandle].gfe->ref_count)==0){ 
+			// free from global table
+			LOG(printf("freeing from gft\n"));
+			FREE_BITMAP_ENTRY(g_free_bitmap,v->oft[fhandle].gft_entry_index);
+			fclose(v->oft[fhandle].gfe->fdesc.fd);
+				
+		}
+		pthread_mutex_unlock(&global_mutex); 
+
+		BUFFER = STATUS_VALID; // status
 	break;
 	default:
 		printf("Unknown file operation %d", op);
@@ -877,6 +982,7 @@ static void* hypervisor_thread(void* args){
 		if (ret == -1) {
 			printf("KVM_RUN failed\n");
 			vm_destroy(&v);
+			free(targs);
 			return 0;
 		}
 		
@@ -901,6 +1007,7 @@ static void* hypervisor_thread(void* args){
 						if(handleFileOP(&v, targs->argv) < 0){
 							printf("KVM_RUN failed\n");
 							vm_destroy(&v);
+							free(targs);
 							return 0;
 						} 
 					

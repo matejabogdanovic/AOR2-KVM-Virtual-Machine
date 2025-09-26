@@ -128,7 +128,7 @@ int kvm_fseek(int f,long int offset, int position){
 	if(position != KVM_SEEK_END && position != KVM_SEEK_SET && position != KVM_SEEK_CUR)return -1;
 
 	outb(FSEEK, PORT_FILE); // 4 je fseek
-	outb(f, PORT_FILE); // prosledi fhandle
+	outl(f, PORT_FILE); // prosledi fhandle
 	if(inb(PORT_FILE) == STATUS_INVALID)return -1; // status da li smem da radim operaciju
 
 	outb(offset, PORT_FILE);
@@ -141,6 +141,6 @@ int kvm_fseek(int f,long int offset, int position){
 // It returns zero if successful, or else it returns a non-zero value.
 int kvm_fclose(int f){
 	outb(FCLOSE, PORT_FILE); // 5 je fclose
-	outb(f, PORT_FILE); // prosledi fhandle
+	outl(f, PORT_FILE); // prosledi fhandle
 	return inb(PORT_FILE);
 }
