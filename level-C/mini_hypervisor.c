@@ -590,6 +590,51 @@ int open_shared_file(struct vm* v, char* fname, int access){
 	return oft_entry;
 }
 
+int open_local_file(struct vm* v, char* fname, int access){
+	LOG(printf("file is local and is not opened\n"););
+			// napravi filename.id
+		char buf2[FOPEN_MAX_PATHSIZE+4] = {0};
+		strcpy(buf2, fname);
+		char str_id[10];
+  	sprintf(str_id, "%d", v->id);
+		strcat(buf2, str_id);
+		// nadji slobodno mesto u oft
+		int oft_entry = find_free_entry(v->free_bitmap);
+		if(oft_entry < 0){
+			printf("No more space to open files.");
+			return -1;
+		}
+		// nadji slobodno mesto u gft
+		pthread_mutex_lock(&global_mutex);
+		int gft_entry = g_find_free_entry(g_free_bitmap);
+		if(gft_entry < 0){
+			pthread_mutex_unlock(&global_mutex);
+			printf("No more space to open GLOBAL files.");
+			
+			return -1;
+		}
+		// globalno
+		TAKE_BITMAP_ENTRY(g_free_bitmap, gft_entry);
+		gft[gft_entry].access = access; // postavi sebi file access
+		gft[gft_entry].ref_count = 1;
+		strcpy(gft[gft_entry].fdesc.path, fname);
+		
+		pthread_mutex_unlock(&global_mutex);
+		// otvori fajl
+		FILE* f = fopen(buf2, (access==KVM_FILE_READ?"r":(access==KVM_FILE_WRITE?"w":"w+")));
+		if(f==NULL){
+			
+			return -1;
+		}
+		gft[gft_entry].fdesc.fd = f;
+		// lokalno
+		TAKE_BITMAP_ENTRY(v->free_bitmap, oft_entry);
+		v->oft[oft_entry].cursor = 0;
+		v->oft[oft_entry].gfe = &gft[gft_entry];
+		v->oft[oft_entry].local_access = access;
+		v->oft[oft_entry].gft_entry_index = gft_entry;
+		return oft_entry;
+}
 
 int handleFileOP(struct vm* v, char*** argv){
 
@@ -649,51 +694,12 @@ char buffer[FOPEN_MAX_PATHSIZE];
 		}
 		// FAJL SE MORA OTVORITI LOKALNO SAMO AKO SMO GA MI NAPRAVILI
 		if(i>SHARED_FILES_END){
-			LOG(printf("file is local and is not opened\n"););
-			char buf2[FOPEN_MAX_PATHSIZE+4] = {0};
-			strcpy(buf2, buffer);
-			char str_id[10];
-  		sprintf(str_id, "%d", v->id);
-			strcat(buf2, str_id);
-
-			int oft_entry = find_free_entry(v->free_bitmap);
-			if(oft_entry < 0){
-				printf("No more space to open files.");
-				return -1;
-			}
-			pthread_mutex_lock(&global_mutex);
-			int gft_entry = g_find_free_entry(g_free_bitmap);
-			if(gft_entry < 0){
-				pthread_mutex_unlock(&global_mutex);
-				printf("No more space to open GLOBAL files.");
-				
-				return -1;
-			}
-			
-			
-			TAKE_BITMAP_ENTRY(g_free_bitmap, gft_entry);
-			gft[gft_entry].access = c; // postavi sebi file access
-			gft[gft_entry].ref_count = 1;
-			strcpy(gft[gft_entry].fdesc.path, buffer);
-			
-			pthread_mutex_unlock(&global_mutex);
-			
-			FILE* f = fopen(buf2, (c==KVM_FILE_READ?"r":(c==KVM_FILE_WRITE?"w":"w+")));
-			if(f==NULL){
-			
+			fhandle = open_local_file(v, buffer, c);
+			if(((int)fhandle) < 0){
 				IFRUN
 				BUFFER = -1;
-				return 0;
+				return -1;
 			}
-			gft[gft_entry].fdesc.fd = f;
-			// lokalno
-			TAKE_BITMAP_ENTRY(v->free_bitmap, oft_entry);
-			v->oft[oft_entry].cursor = 0;
-			v->oft[oft_entry].gfe = &gft[gft_entry];
-			v->oft[oft_entry].local_access = c;
-			v->oft[oft_entry].gft_entry_index = gft_entry;
-
-			fhandle = oft_entry;
 		}
 		// dohvati fhandle
 		IFRUN
