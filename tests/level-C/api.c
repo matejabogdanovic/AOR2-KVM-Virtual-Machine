@@ -120,9 +120,9 @@ int kvm_fwrite(int f, void* buffer, unsigned long size, unsigned long len){
 	inb(PORT_FILE);
 	return written;
 }
-#define KVM_SEEK_END 1 // It denotes the end of the file.
-#define KVM_SEEK_SET 2 // It denotes starting of the file.
-#define KVM_SEEK_CUR 3 // It denotes the file pointer's current position. 
+#define KVM_SEEK_END 0 // It denotes the end of the file.
+#define KVM_SEEK_SET 1 // It denotes starting of the file.
+#define KVM_SEEK_CUR 2 // It denotes the file pointer's current position. 
 // It returns zero if successful, or else it returns a non-zero value.
 int kvm_fseek(int f,long int offset, int position){
 	if(position != KVM_SEEK_END && position != KVM_SEEK_SET && position != KVM_SEEK_CUR)return -1;

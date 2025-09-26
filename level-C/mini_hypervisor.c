@@ -64,15 +64,15 @@ typedef struct {
 typedef struct {
     file_desc fdesc;       // pokazuje na fizicki fajl
     // unsigned long  cursor;        // zajednicki kursor
-    int flags;
+    int access;
     int ref_count;
 } GlobalFileEntry;
 
 typedef struct {
     GlobalFileEntry* gfe; // pokazivac na globalni objekat
-    int flags;
+
     unsigned long cursor;     
-		int access; // read = 1, write = 2, read-write = 3   
+		int local_access; // read = 1, write = 2, read-write = 3   
 } LocalFileEntry;
 
 // globalna tabela u kojoj se nalaze informacije o fajlovima
@@ -500,15 +500,19 @@ uint16_t PORT_FILE = 0x0278;
 #define FSEEK 4
 #define FCLOSE 5
 
-#define KVM_SEEK_END 1 // It denotes the end of the file.
-#define KVM_SEEK_SET 2 // It denotes starting of the file.
-#define KVM_SEEK_CUR 3 // It denotes the file pointer's current position. 
+#define KVM_SEEK_END SEEK_SET // It denotes the end of the file.
+#define KVM_SEEK_SET SEEK_CUR // It denotes starting of the file.
+#define KVM_SEEK_CUR SEEK_END // It denotes the file pointer's current position. 
 
 #define KVM_FILE_READ 1 
 #define KVM_FILE_WRITE 2 
 #define KVM_FILE_RW 3 
 #define IFRUN if(ioctl(v->vcpu_fd, KVM_RUN, 0)<0)return-1;
 #define BUFFER (*(p + v->run->io.data_offset))
+
+#define TAKE_BITMAP_ENTRY(bitmap, entry) ((bitmap) &= ~(1U << (entry)))
+#define FREE_BITMAP_ENTRY(bitmap, entry) ((bitmap) |= (1U << (entry)))
+#define IS_ENTRY_FREE(bitmap, entry) ((bitmap) & (1U << (entry)))
 
 int open_shared_file(struct vm* v, char* fname, int access){
 	LOG(printf("open shared -> %s id -> %d \n", fname, v->id););
@@ -532,8 +536,15 @@ int open_shared_file(struct vm* v, char* fname, int access){
 			if(!strcmp(e->fdesc.path, fname)){
 				LOG(printf("File already open -> %s\n", e->fdesc.path));
 				// todo
-				v->free_bitmap &= ~(1 << oft_entry); // zauzmi mesto u lokalnoj tabeli
+				// v->free_bitmap &= ~(1 << oft_entry); // zauzmi mesto u lokalnoj tabeli
+					// v->free_bitmap &= ~(1 << oft_entry); // zauzmi mesto u lokalnoj tabeli
+
+				gft[i].ref_count ++;
 				pthread_mutex_unlock(&global_mutex);
+				TAKE_BITMAP_ENTRY(v->free_bitmap, oft_entry);
+				v->oft[oft_entry].cursor = 0;
+				v->oft[oft_entry].gfe = &gft[i];
+				v->oft[oft_entry].local_access = access;
 				return 0;
 			}
 		}
@@ -558,19 +569,20 @@ int open_shared_file(struct vm* v, char* fname, int access){
 		return -1;
 	}
 
-	g_free_bitmap &= ~(1 << gft_entry);// zauzmi mesto u globalnoj tabeli
-
+	// g_free_bitmap &= ~(1 << gft_entry);// zauzmi mesto u globalnoj tabeli
+	TAKE_BITMAP_ENTRY(g_free_bitmap, gft_entry);
 	gft[gft_entry].fdesc.fd = fp;
-	gft[gft_entry].flags = KVM_FILE_RW; // uvek su za citanje i upis dozvoljeni
+	gft[gft_entry].access = KVM_FILE_RW; // uvek su za citanje i upis dozvoljeni
 	gft[gft_entry].ref_count = 1;
 	strcpy(gft[gft_entry].fdesc.path, fname);
 	
 	pthread_mutex_unlock(&global_mutex);
 
-	v->free_bitmap &= ~(1 << oft_entry); // zauzmi mesto u lokalnoj tabeli
+	// v->free_bitmap &= ~(1 << oft_entry); // zauzmi mesto u lokalnoj tabeli
+	TAKE_BITMAP_ENTRY(v->free_bitmap, oft_entry);
 	v->oft[oft_entry].cursor = 0;
 	v->oft[oft_entry].gfe = &gft[gft_entry];
-	v->oft[oft_entry].access = access;
+	v->oft[oft_entry].local_access = access;
 
 
 
@@ -607,23 +619,19 @@ char buffer[FOPEN_MAX_PATHSIZE];
 		c = BUFFER;
 		printf("access: %x \n", c);	
 
-
+		int fd = -1;
 		for (int i = SHARED_FILES_START; i <= SHARED_FILES_END; i++)
 		{
 			if(!strcmp((*argv)[i], buffer)){ // want's to open shared file
 				
-				int fd = open_shared_file(v, (*argv)[i], c);
-				// dohvati fhandle
-				IFRUN
-				BUFFER = fd;
+				fd = open_shared_file(v, (*argv)[i], c);
 
 				break;
 			}
 		}
-		
-		
-
-
+		// dohvati fhandle
+		IFRUN
+		BUFFER = fd;
 		
 		break;
 	
@@ -633,21 +641,45 @@ char buffer[FOPEN_MAX_PATHSIZE];
 		fhandle = BUFFER;// prosledi fhandle
 		printf("fhandle %d \n", fhandle);
 		IFRUN
+		// cemu sluzi global access polje??
+		if(IS_ENTRY_FREE(v->free_bitmap, fhandle)){
+			BUFFER = STATUS_INVALID;
+			return 0;
+		}
+		if(!(v->oft[fhandle].local_access & KVM_FILE_READ)){
+			BUFFER = STATUS_INVALID;
+			return 0;
+		}
 
 		BUFFER = STATUS_VALID; // status da li smem da radim operaciju
-	
+		
 	
 		while (1){
 			
 			IFRUN	
 
 			if(v->run->io.direction == KVM_EXIT_IO_OUT){
-				printf("kraj\n");
+				LOG(printf("kraj\n"));
 				break;
 			}	
-			BUFFER = '?';
+			// size_t read = fread(&c, 1, 1, v->oft[fhandle].gfe->fdesc.fd);
+			size_t read = 0;
+			fpos_t pos;
+
+			pthread_mutex_lock(&global_mutex);     
+			if (fgetpos(v->oft[fhandle].gfe->fdesc.fd, &pos) == 0) {     // zapamti trenutnu poziciju
+
+					fseek(v->oft[fhandle].gfe->fdesc.fd, v->oft[fhandle].cursor, SEEK_SET);
+					read = fread(&c, 1, 1, v->oft[fhandle].gfe->fdesc.fd);   // procitaj
+					v->oft[fhandle].cursor += read;
+					LOG(printf("cursor: %ld\n", v->oft[fhandle].cursor));
+
+					fsetpos(v->oft[fhandle].gfe->fdesc.fd, &pos);            // vrati poziciju
+			}
+			pthread_mutex_unlock(&global_mutex);    
+			BUFFER = c;
 			IFRUN
-			BUFFER = STATUS_VALID;
+			BUFFER = (read>0)?STATUS_VALID:STATUS_INVALID;
 		}
 
 	break;
@@ -657,6 +689,15 @@ char buffer[FOPEN_MAX_PATHSIZE];
 		fhandle = BUFFER;// prosledi fhandle
 		printf("fhandle %d \n", fhandle);
 		IFRUN
+
+		if(IS_ENTRY_FREE(v->free_bitmap, fhandle)){
+			BUFFER = STATUS_INVALID;
+			return 0;
+		}
+		if(!(v->oft[fhandle].local_access & KVM_FILE_WRITE)){
+			BUFFER = STATUS_INVALID;
+			return 0;
+		}
 
 		BUFFER = STATUS_VALID; // status da li smem da radim operaciju
 	
@@ -681,14 +722,67 @@ char buffer[FOPEN_MAX_PATHSIZE];
 		printf("fhandle %d \n", fhandle);
 		IFRUN
 
+		if(IS_ENTRY_FREE(v->free_bitmap, fhandle)){
+			BUFFER = STATUS_INVALID;
+			return 0;
+		}
+		// read ili write dozvoljen inace ne
+		if(!(v->oft[fhandle].local_access & KVM_FILE_RW)){
+			BUFFER = STATUS_INVALID;
+			return 0;
+		}
+
 		BUFFER = STATUS_VALID; // status da li smem da radim operaciju
+	
 
 		IFRUN
-		printf("offset %d\n", BUFFER);
+		long offset = BUFFER;
+		LOG(printf("offset %ld\n", offset));
 		IFRUN
-		printf("position %d\n", BUFFER);
+		uint8_t position = BUFFER;
+		LOG(printf("position %d\n", position));
+		
 		IFRUN
-		BUFFER = 5;
+		// BUFFER = fseek(v->oft[fhandle].gfe->fdesc.fd, offset, position); // globalno pomera!!
+		switch (position)
+		{
+		case KVM_SEEK_END:
+			pthread_mutex_lock(&global_mutex);  
+
+			fseek(v->oft[fhandle].gfe->fdesc.fd, 0, SEEK_END);
+			long cursor_pos = ftell(v->oft[fhandle].gfe->fdesc.fd);
+			if (cursor_pos == -1L) {
+					perror("ftell failed");
+					BUFFER = -1;
+					pthread_mutex_unlock(&global_mutex);  
+					return -1;
+			} 
+			pthread_mutex_unlock(&global_mutex);  
+			if(offset+cursor_pos < 0){
+				BUFFER = -1;
+				return 0;
+			}
+			v->oft[fhandle].cursor = offset+cursor_pos;
+			break;
+		case KVM_SEEK_SET:
+			if(offset < 0){
+				BUFFER = -1;
+				return 0;
+			}
+			v->oft[fhandle].cursor = offset;
+			
+			break;	
+		case KVM_SEEK_CUR:
+			if(offset + v->oft[fhandle].cursor  < 0){
+				BUFFER = -1;
+				return 0;
+			}
+			v->oft[fhandle].cursor += offset;
+			break;
+		default:
+			break;
+		}
+		BUFFER = 0;
 	break;
 
 	case FCLOSE:
