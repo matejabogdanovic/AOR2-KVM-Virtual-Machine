@@ -20,6 +20,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <linux/kvm.h>
+#include <termios.h>
 
 
 #define TRUE 1
@@ -446,7 +447,15 @@ int main(int argc, char *argv[])
 		perror("KVM_SET_REGS");
 		return 0;
 	}
+  struct termios oldt, newt;
 
+  // sacuvaj stare postavke terminala
+  tcgetattr(STDIN_FILENO, &oldt);
+  newt = oldt;
+
+  // iskljuci canonical mode i echo
+  newt.c_lflag &= ~(ICANON | ECHO);
+  tcsetattr(STDIN_FILENO, TCSANOW, &newt);
 	// hipervizor
 	while(stop == 0) {
 		ret = ioctl(v.vcpu_fd, KVM_RUN, 0);
@@ -462,7 +471,8 @@ int main(int argc, char *argv[])
 					char *p = (char *)v.run;
 					printf("%c", *(p + v.run->io.data_offset));
 				}else if(v.run->io.direction == KVM_EXIT_IO_IN && v.run->io.port == IO_PORT){
-					char c = getchar();
+					char c ;
+					read(STDIN_FILENO, &c, 1);
 					char *p = (char *)v.run;
 					*(p + v.run->io.data_offset) = c;
 				}else{
@@ -484,6 +494,7 @@ int main(int argc, char *argv[])
   	}
 
 	vm_destroy(&v);
-
+	// vrati stare postavke terminala
+  tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
 	
 }

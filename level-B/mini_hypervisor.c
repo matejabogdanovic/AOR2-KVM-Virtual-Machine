@@ -21,6 +21,7 @@
 #include <stdint.h>
 #include <linux/kvm.h>
 #include <pthread.h>
+#include <termios.h>
 
 #define TRUE 1
 #define FALSE 0
@@ -465,7 +466,8 @@ static void* hypervisor_thread(void* guest_img_name){
 					char *p = (char *)v.run;
 					printf("%c", *(p + v.run->io.data_offset));
 				}else if(v.run->io.direction == KVM_EXIT_IO_IN && v.run->io.port == IO_PORT){
-					char c = getchar();
+					char c ;
+					read(STDIN_FILENO, &c, 1);
 					char *p = (char *)v.run;
 					*(p + v.run->io.data_offset) = c;
 				}else{
@@ -501,7 +503,15 @@ int main(int argc, char *argv[])
       perror("malloc");
       return -1;
   }
-  
+    struct termios oldt, newt;
+
+  // sacuvaj stare postavke terminala
+  tcgetattr(STDIN_FILENO, &oldt);
+  newt = oldt;
+
+  // iskljuci canonical mode i echo
+  newt.c_lflag &= ~(ICANON | ECHO);
+  tcsetattr(STDIN_FILENO, TCSANOW, &newt);
   for (int i = 0; i < N; i++) {
       
       if (pthread_create(&threads[i], NULL, &hypervisor_thread, argv[GUEST_IMG_START+i]) != 0) {
@@ -516,8 +526,9 @@ int main(int argc, char *argv[])
       pthread_join(threads[i], NULL);
   }
   free(threads);
-
-  // printf("Sve %d niti su završile.\n", N);
+// vrati stare postavke terminala
+  tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+  printf("Sve: %d VM su uspesno zavrsile.\n", N);
 
 	
 }

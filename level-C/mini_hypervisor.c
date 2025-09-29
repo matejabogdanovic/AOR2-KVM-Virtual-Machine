@@ -21,6 +21,7 @@
 #include <stdint.h>
 #include <linux/kvm.h>
 #include <pthread.h>
+#include <termios.h>
 
 pthread_mutex_t global_mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -28,7 +29,7 @@ pthread_mutex_t global_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define FALSE 0
 
 uint64_t GUEST_START_ADDR = 0x1000; // Početna adresa za učitavanje gosta
-#define ENABLE_LOG 1
+#define ENABLE_LOG 0
 
 #if ENABLE_LOG
   #define LOG(x) x;
@@ -569,7 +570,7 @@ int open_shared_file(struct vm* v, char* fname, int access){
 	int gft_entry = g_find_free_entry(g_free_bitmap);
 	if(gft_entry < 0){
 		pthread_mutex_unlock(&global_mutex);
-		printf("No more space to open GLOBAL files.");
+		LOG(printf("No more space to open GLOBAL files."));
 		
 		return -1;
 	}
@@ -708,7 +709,7 @@ int handleFileOP(struct vm* v, char*** argv){
 
 	char *p = (char *)v->run;
 	uint8_t op = *(p + v->run->io.data_offset);
-	printf("OP: %c======================\n", '0'+op);
+	LOG(printf("OP: %c======================\n", '0'+op);)
 
 	uint8_t c = 1;
 	uint32_t fhandle = 1;
@@ -727,12 +728,12 @@ char buffer[FOPEN_MAX_PATHSIZE];
 		}
 		buffer[len]='\0';
 		
-		printf("path: %s \n", buffer);
+		LOG(printf("path: %s \n", buffer);)
 		
 				
 		IFRUN
 		c = BUFFER;
-		printf("access: %x \n", c);	
+		LOG(printf("access: %x \n", c);	)
 
 		// PROVERITI LOKALNE FAJLOVE PRVO, JEL OTVOREN TU
 		uint32_t tmp = v->free_bitmap;	
@@ -789,7 +790,7 @@ char buffer[FOPEN_MAX_PATHSIZE];
 		
 		IFRUN
 		fhandle = BUFFER;// prosledi fhandle
-		printf("fhandle %d \n", fhandle);
+		LOG(printf("fhandle %d \n", fhandle));
 		IFRUN
 
 		if(fhandle >= OFT_SIZE){
@@ -847,7 +848,7 @@ char buffer[FOPEN_MAX_PATHSIZE];
 		
 		IFRUN
 		fhandle = BUFFER;// prosledi fhandle
-		printf("fhandle %d \n", fhandle);
+		LOG(printf("fhandle %d \n", fhandle));
 		IFRUN
 
 		if(fhandle >= OFT_SIZE){
@@ -903,11 +904,11 @@ char buffer[FOPEN_MAX_PATHSIZE];
 			IFRUN	
 
 			if(v->run->io.direction == KVM_EXIT_IO_IN){
-				printf("\nkraj\n");
+				LOG(printf("\nkraj upisa\n");)
 				break;
 			}			
 			c = BUFFER;
-			printf("%c", c);
+			LOG(printf("%c", c);)
 			// UPISI
 			fwrite(&c, 1, 1, v->oft[fhandle].gfe->fdesc.fd);
 			v->oft[fhandle].cursor += 1; // pomeri kursor
@@ -922,7 +923,7 @@ char buffer[FOPEN_MAX_PATHSIZE];
 	case FSEEK:
 		IFRUN
 		fhandle = BUFFER;// prosledi fhandle
-		printf("fhandle %d \n", fhandle);
+		LOG(printf("fhandle %d \n", fhandle));
 		IFRUN
 
 		if(fhandle >= OFT_SIZE){
@@ -1001,7 +1002,7 @@ char buffer[FOPEN_MAX_PATHSIZE];
 	case FCLOSE:
 		IFRUN
 		fhandle = BUFFER;// prosledi fhandle
-		printf("fhandle %d \n", fhandle);
+		LOG(printf("fhandle %d \n", fhandle));
 		IFRUN
 		if(fhandle >= OFT_SIZE){
 			BUFFER = STATUS_INVALID;
@@ -1125,9 +1126,10 @@ static void* hypervisor_thread(void* args){
 				if(v.run->io.port == PORT_IO){
 					if (v.run->io.direction == KVM_EXIT_IO_OUT ) {
 						char *p = (char *)v.run;
-						printf("------USER SAYS: %c\n", *(p + v.run->io.data_offset));
+						printf("%c", *(p + v.run->io.data_offset));
 					}else if(v.run->io.direction == KVM_EXIT_IO_IN){
-						char c = getchar();
+						char c;
+						 read(STDIN_FILENO, &c, 1);
 						char *p = (char *)v.run;
 						*(p + v.run->io.data_offset) = c;
 					}else{
@@ -1201,7 +1203,15 @@ int main(int argc, char *argv[])
       perror("malloc");
       return -1;
   }
-  
+  struct termios oldt, newt;
+
+  // sacuvaj stare postavke terminala
+  tcgetattr(STDIN_FILENO, &oldt);
+  newt = oldt;
+
+  // iskljuci canonical mode i echo
+  newt.c_lflag &= ~(ICANON | ECHO);
+  tcsetattr(STDIN_FILENO, TCSANOW, &newt);
   for (int i = 0; i < N; i++) {
      
 			thread_args* ta = malloc(sizeof( thread_args));
@@ -1225,8 +1235,10 @@ int main(int argc, char *argv[])
       pthread_join(threads[i], NULL);
   }
   free(threads);
+	// vrati stare postavke terminala
+  tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
 
-  // printf("Sve %d niti su završile.\n", N);
+  printf("Sve: %d VM su uspesno zavrsile.\n", N);
 
 	
 }

@@ -86,12 +86,8 @@ void citanje_nema_privilegije(const char* path){
 
 
 
-
-void
-__attribute__((noreturn))
-__attribute__((section(".start")))
-_start(void) {
-
+void maintest(){
+	// kvm_getc();
 	int fhandle = kvm_fopen("./files/file1.txt", KVM_FILE_WRITE | KVM_FILE_READ);
 	int cnt = 256;
 
@@ -105,6 +101,14 @@ _start(void) {
 	
 	kvm_fwrite(fhandle, " Dodajem ovo.", sizeof(char),12);
 	kvm_putc('0'+kvm_fclose(fhandle));
+}
+void
+__attribute__((noreturn))
+__attribute__((section(".start")))
+_start(void) {
+
+
+	maintest();
 	for (;;)
 		asm("hlt");
 }

@@ -4,6 +4,7 @@
     "random": "c",
     "stdint.h": "c",
     "algorithm": "c",
-    "pthread.h": "c"
+    "pthread.h": "c",
+    "kvm.h": "c"
   }
 }

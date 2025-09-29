@@ -28,8 +28,8 @@ _start(void) {
 	uint8_t c = inb(PORT_IO);
 	print("Echo: ");
 	outb(c, PORT_IO);
-	c = inb(PORT_IO);
-	outb(c, PORT_IO); // print '\n' from console
+	// c = inb(PORT_IO);
+	// outb(c, PORT_IO); // print '\n' from console
 
 
 
