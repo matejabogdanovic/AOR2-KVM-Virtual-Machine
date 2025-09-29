@@ -554,7 +554,7 @@ int open_shared_file(struct vm* v, char* fname, int access){
 	FILE *fp;
 
   
-  fp = fopen(fname, "r+"); // citanje pisanje kreiranje ne
+  fp = fopen(fname, "r+"); // r+ citanje pisanje kreiranje ne
 	if (fp == NULL) {
 		pthread_mutex_unlock(&global_mutex);
     perror("shared fopen");
@@ -590,22 +590,8 @@ int open_shared_file(struct vm* v, char* fname, int access){
 	return oft_entry;
 }
 
-int open_local_file(struct vm* v, char* fname, int access){
-	LOG(printf("file is local and is not opened\n"););
-			// napravi filename.id
-		char buf2[FOPEN_MAX_PATHSIZE+4] = {0};
-		strcpy(buf2, fname);
-		char str_id[10];
-  	sprintf(str_id, "%d", v->id);
-		strcat(buf2, str_id);
-		// nadji slobodno mesto u oft
-		int oft_entry = find_free_entry(v->free_bitmap);
-		if(oft_entry < 0){
-			printf("No more space to open files.");
-			return -1;
-		}
-		// nadji slobodno mesto u gft
-		pthread_mutex_lock(&global_mutex);
+int populate_new_gft_entry(char* fname, int access){
+	pthread_mutex_lock(&global_mutex);
 		int gft_entry = g_find_free_entry(g_free_bitmap);
 		if(gft_entry < 0){
 			pthread_mutex_unlock(&global_mutex);
@@ -617,16 +603,45 @@ int open_local_file(struct vm* v, char* fname, int access){
 		TAKE_BITMAP_ENTRY(g_free_bitmap, gft_entry);
 		gft[gft_entry].access = access; // postavi sebi file access
 		gft[gft_entry].ref_count = 1;
-		strcpy(gft[gft_entry].fdesc.path, fname);
+		strcpy(gft[gft_entry].fdesc.path, fname); 
 		
 		pthread_mutex_unlock(&global_mutex);
 		// otvori fajl
-		FILE* f = fopen(buf2, (access==KVM_FILE_READ?"r":(access==KVM_FILE_WRITE?"w":"w+")));
+		FILE* f = fopen(fname, (access==KVM_FILE_READ?"r":(access==KVM_FILE_WRITE?"w":"w+")));
 		if(f==NULL){
 			
 			return -1;
 		}
 		gft[gft_entry].fdesc.fd = f;
+
+		return gft_entry;
+}
+
+void make_local_fname(char* fname, char *buf, int id){
+	
+		strcpy(buf, fname);
+		char str_id[10];
+  	sprintf(str_id, "%d", id);
+		strcat(buf, str_id);
+}
+
+int open_local_file(struct vm* v, char* fname, int access){
+	LOG(printf("file is local and is not opened\n"););
+			// napravi filename.id
+		char buf2[FOPEN_MAX_PATHSIZE+1] = {0};
+		make_local_fname(fname, buf2, v->id);
+		
+		// nadji slobodno mesto u oft
+		int oft_entry = find_free_entry(v->free_bitmap);
+		if(oft_entry < 0){
+			printf("No more space to open files.");
+			return -1;
+		}
+		// nadji slobodno mesto u gft
+		int gft_entry = populate_new_gft_entry(buf2, access);
+		if(gft_entry < 0){
+			return -1;
+		}
 		// lokalno
 		TAKE_BITMAP_ENTRY(v->free_bitmap, oft_entry);
 		v->oft[oft_entry].cursor = 0;
@@ -636,6 +651,33 @@ int open_local_file(struct vm* v, char* fname, int access){
 		return oft_entry;
 }
 
+int find_shared_file_index(char* shared_files[], char* fname){
+
+	
+	for (int i = SHARED_FILES_START ;i <= SHARED_FILES_END; i++)
+	{
+		if(!strcmp(shared_files[i], fname)){ // want's to open shared file
+				return i;
+				
+		}
+	}
+	return -1;
+}
+
+
+void copy_from_to(FILE* from, FILE* to){
+	fseek(from,0, SEEK_SET); // postavi kursor
+	fseek(to,0, SEEK_SET); // postavi kursor
+				
+	char buffer[1024];
+  while (fgets(buffer, sizeof(buffer), from) != NULL) {
+      fputs(buffer, to);
+  }
+	
+
+	fseek(from,0, SEEK_SET); // vrati kursor
+	fseek(to,0, SEEK_SET); // vrati kursor
+}
 int handleFileOP(struct vm* v, char*** argv){
 
 	char *p = (char *)v->run;
@@ -644,7 +686,7 @@ int handleFileOP(struct vm* v, char*** argv){
 
 	uint8_t c = 1;
 	uint32_t fhandle = 1;
-
+int shared_index = -1;
 char buffer[FOPEN_MAX_PATHSIZE];
   	int len = 0;
 	switch (op)
@@ -683,17 +725,17 @@ char buffer[FOPEN_MAX_PATHSIZE];
 			tmp = tmp >> 1;
 		}
 		// PROVERA DELJENIH FAJLOVA
-		fhandle = -1;
-		int i = SHARED_FILES_START;
-		for ( ;i <= SHARED_FILES_END; i++)
-		{
-			if(!strcmp((*argv)[i], buffer)){ // want's to open shared file
-				fhandle = open_shared_file(v, (*argv)[i], c);
-				break;
+		shared_index = find_shared_file_index(*argv, buffer);
+		if(shared_index > 0){
+			fhandle = open_shared_file(v, (*argv)[shared_index], c);
+			if(((int)fhandle) < 0){
+				IFRUN
+				BUFFER = -1;
+				return -1;
 			}
 		}
 		// FAJL SE MORA OTVORITI LOKALNO SAMO AKO SMO GA MI NAPRAVILI
-		if(i>SHARED_FILES_END){
+		else{
 			fhandle = open_local_file(v, buffer, c);
 			if(((int)fhandle) < 0){
 				IFRUN
@@ -731,7 +773,10 @@ char buffer[FOPEN_MAX_PATHSIZE];
 
 		BUFFER = STATUS_VALID; // status da li smem da radim operaciju
 		
-	
+		// PROVERA DELJENIH FAJLOVA
+		shared_index = find_shared_file_index(*argv, buffer);
+		
+
 		while (1){
 			
 			IFRUN	
@@ -744,17 +789,18 @@ char buffer[FOPEN_MAX_PATHSIZE];
 			size_t read = 0;
 			fpos_t pos;
 
-			pthread_mutex_lock(&global_mutex);     
-			if (fgetpos(v->oft[fhandle].gfe->fdesc.fd, &pos) == 0) {     // zapamti trenutnu poziciju
+			if(shared_index>0)pthread_mutex_lock(&global_mutex);     
 
-					fseek(v->oft[fhandle].gfe->fdesc.fd, v->oft[fhandle].cursor, SEEK_SET);
-					read = fread(&c, 1, 1, v->oft[fhandle].gfe->fdesc.fd);   // procitaj
-					v->oft[fhandle].cursor += read;
-					LOG(printf("cursor: %ld\n", v->oft[fhandle].cursor));
 
-					fsetpos(v->oft[fhandle].gfe->fdesc.fd, &pos);            // vrati poziciju
-			}
-			pthread_mutex_unlock(&global_mutex);    
+			fseek(v->oft[fhandle].gfe->fdesc.fd, v->oft[fhandle].cursor, SEEK_SET); // postavi kursor
+				
+			read = fread(&c, 1, 1, v->oft[fhandle].gfe->fdesc.fd);   // procitaj
+			v->oft[fhandle].cursor += read;
+			LOG(printf("cursor: %ld read: %ld \n", v->oft[fhandle].cursor, read));
+
+			fseek(v->oft[fhandle].gfe->fdesc.fd, 0, SEEK_SET); // vrati kursor na pocetak
+	
+			if(shared_index>0)pthread_mutex_unlock(&global_mutex);    
 			BUFFER = c;
 			IFRUN
 			BUFFER = (read>0)?STATUS_VALID:STATUS_INVALID;
@@ -781,23 +827,59 @@ char buffer[FOPEN_MAX_PATHSIZE];
 			BUFFER = STATUS_INVALID;
 			return 0;
 		}
-
 		BUFFER = STATUS_VALID; // status da li smem da radim operaciju
-	
-	
-		while (1){
+		// PROVERA DELJENIH FAJLOVA
+		shared_index = find_shared_file_index(*argv, v->oft[fhandle].gfe->fdesc.path);
+		if(shared_index > 0){
+			LOG(printf("copy on write \n"));
+			// otvori gft ulaz i otvori lokalan fajl u njemu 
+			char new_fname[FOPEN_MAX_PATHSIZE+1] = {0};
+			make_local_fname(v->oft[fhandle].gfe->fdesc.path, new_fname, v->id);
+			int gft_entry = populate_new_gft_entry(new_fname, v->oft[fhandle].local_access);
+			// otvorio je nov fajl sad treba da se kopira i da se zatvori prethodni ako treba
+			if(gft_entry < 0){
+				return -1;
+			}
+
+			// fhandle ostaje isti jer ostaje isti oft ulaz
+			pthread_mutex_lock(&global_mutex);
+			copy_from_to(v->oft[fhandle].gfe->fdesc.fd, gft[gft_entry].fdesc.fd);
+			if((--v->oft[fhandle].gfe->ref_count)==0){ 
+				// free from global table
+				LOG(printf("freeing from gft\n"));
+				FREE_BITMAP_ENTRY(g_free_bitmap,v->oft[fhandle].gft_entry_index);
+				fclose(v->oft[fhandle].gfe->fdesc.fd);
+					
+			}
+			pthread_mutex_unlock(&global_mutex);
+
+			v->oft[fhandle].gfe = &gft[gft_entry];
+			v->oft[fhandle].gft_entry_index = gft_entry;
 			
+
+		
+		}
+		// sigurno je lokalan fajl
+		fseek(v->oft[fhandle].gfe->fdesc.fd, v->oft[fhandle].cursor, SEEK_SET); // postavi kursor
+		while (1){
 			IFRUN	
 
 			if(v->run->io.direction == KVM_EXIT_IO_IN){
 				printf("\nkraj\n");
 				break;
 			}			
-			printf("%c", BUFFER);
+			c = BUFFER;
+			printf("%c", c);
+			// UPISI
+			fwrite(&c, 1, 1, v->oft[fhandle].gfe->fdesc.fd);
+			v->oft[fhandle].cursor += 1; // pomeri kursor
+			LOG(printf("cursor: %ld\n", v->oft[fhandle].cursor));
+
+			
 			IFRUN
 			BUFFER = STATUS_VALID;
 		}
-
+		fseek(v->oft[fhandle].gfe->fdesc.fd, 0, SEEK_SET); // vrati kursor na pocetak
 	break;
 	case FSEEK:
 		IFRUN
@@ -833,20 +915,24 @@ char buffer[FOPEN_MAX_PATHSIZE];
 		
 		IFRUN
 		// BUFFER = fseek(v->oft[fhandle].gfe->fdesc.fd, offset, position); // globalno pomera!!
+
+		// PROVERA DELJENIH FAJLOVA
+		shared_index = find_shared_file_index(*argv, v->oft[fhandle].gfe->fdesc.path);
+		
 		switch (position)
 		{
 		case KVM_SEEK_END:
-			pthread_mutex_lock(&global_mutex);  
+			if(shared_index>0)pthread_mutex_lock(&global_mutex);  
 
 			fseek(v->oft[fhandle].gfe->fdesc.fd, 0, SEEK_END);
 			long cursor_pos = ftell(v->oft[fhandle].gfe->fdesc.fd);
 			if (cursor_pos == -1L) {
 					perror("ftell failed");
 					BUFFER = -1;
-					pthread_mutex_unlock(&global_mutex);  
+					if(shared_index>0)pthread_mutex_unlock(&global_mutex);  
 					return -1;
 			} 
-			pthread_mutex_unlock(&global_mutex);  
+			if(shared_index>0)pthread_mutex_unlock(&global_mutex);  
 			if(offset+cursor_pos < 0){
 				BUFFER = -1;
 				return 0;
@@ -891,6 +977,10 @@ char buffer[FOPEN_MAX_PATHSIZE];
 
 		FREE_BITMAP_ENTRY(v->free_bitmap, fhandle);
 
+
+		// PROVERA DELJENIH FAJLOVA
+		// shared_index = find_shared_file_index(*argv, v->oft[fhandle].gfe->fdesc.path);
+		
 		pthread_mutex_lock(&global_mutex);  
 			
 		if((--v->oft[fhandle].gfe->ref_count)==0){ 
