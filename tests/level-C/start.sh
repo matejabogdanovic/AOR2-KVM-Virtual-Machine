@@ -9,4 +9,4 @@ ld -T guest.ld guest1.o -o guest1.img
 ld -T guest.ld guest2.o -o guest2.img
 
 
-$PROGRAM -g guest2.img guest2.img  -p 4 --memory 4 --file  ./files/file.txt
+$PROGRAM -g guest2.img guest1.img guest2.img -p 2 --memory 2 --file  ./files/file1.txt ./files/file2.txt

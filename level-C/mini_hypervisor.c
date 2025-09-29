@@ -554,7 +554,11 @@ int open_shared_file(struct vm* v, char* fname, int access){
 	FILE *fp;
 
   
-  fp = fopen(fname, "r+"); // r+ citanje pisanje kreiranje ne
+  fp = fopen(fname, "r+"); // otvaranje fajla koji postoji
+	if(fp==NULL){
+		LOG(printf("file doesn't exist\n"););
+		fp = fopen(fname, "w+"); // otvaranje novog cistog fajla
+	}	
 	if (fp == NULL) {
 		pthread_mutex_unlock(&global_mutex);
     perror("shared fopen");
@@ -591,6 +595,33 @@ int open_shared_file(struct vm* v, char* fname, int access){
 }
 
 int populate_new_gft_entry(char* fname, int access){
+	// otvori fajl
+		FILE* f  = NULL;
+		switch (access)
+		{
+		case KVM_FILE_READ:
+			// mora postojati
+			f = fopen(fname, "r");
+			break;
+		case KVM_FILE_WRITE:
+		 case KVM_FILE_RW:
+		
+		// break;
+		// case KVM_FILE_RW:
+			
+			f = fopen(fname, "r+"); // otvaranje fajla koji postoji
+			if(f==NULL){
+				LOG(printf("file doesn't exist\n"););
+				f = fopen(fname, "w+"); // otvaranje novog cistog fajla
+			}	
+		break;
+
+		}
+		if(f==NULL){
+			LOG(printf("can't open file\n"));
+			
+			return -1;
+		}
 	pthread_mutex_lock(&global_mutex);
 		int gft_entry = g_find_free_entry(g_free_bitmap);
 		if(gft_entry < 0){
@@ -603,15 +634,10 @@ int populate_new_gft_entry(char* fname, int access){
 		TAKE_BITMAP_ENTRY(g_free_bitmap, gft_entry);
 		gft[gft_entry].access = access; // postavi sebi file access
 		gft[gft_entry].ref_count = 1;
-		strcpy(gft[gft_entry].fdesc.path, fname); 
+		strcpy(gft[gft_entry].fdesc.path, fname); 	
 		
 		pthread_mutex_unlock(&global_mutex);
-		// otvori fajl
-		FILE* f = fopen(fname, (access==KVM_FILE_READ?"r":(access==KVM_FILE_WRITE?"w":"w+")));
-		if(f==NULL){
-			
-			return -1;
-		}
+		
 		gft[gft_entry].fdesc.fd = f;
 
 		return gft_entry;
@@ -700,6 +726,7 @@ char buffer[FOPEN_MAX_PATHSIZE];
 			buffer[len++]=c;
 		}
 		buffer[len]='\0';
+		
 		printf("path: %s \n", buffer);
 		
 				
@@ -726,12 +753,21 @@ char buffer[FOPEN_MAX_PATHSIZE];
 		}
 		// PROVERA DELJENIH FAJLOVA
 		shared_index = find_shared_file_index(*argv, buffer);
+		// provera jel vec copy on write uradjen i fajl postoji
+		char buffer_local_name[1024];
+		make_local_fname(buffer, buffer_local_name, v->id);
+		FILE* check = fopen(buffer_local_name, "r");
+		if(check != NULL){
+			LOG(printf("file exists and was copied on write\n");)
+			fclose(check);
+			shared_index = -1; // fajl postoji pa pusti nek ga otvori
+		}
 		if(shared_index > 0){
 			fhandle = open_shared_file(v, (*argv)[shared_index], c);
 			if(((int)fhandle) < 0){
 				IFRUN
 				BUFFER = -1;
-				return -1;
+				return 0;
 			}
 		}
 		// FAJL SE MORA OTVORITI LOKALNO SAMO AKO SMO GA MI NAPRAVILI
@@ -740,7 +776,7 @@ char buffer[FOPEN_MAX_PATHSIZE];
 			if(((int)fhandle) < 0){
 				IFRUN
 				BUFFER = -1;
-				return -1;
+				return 0;
 			}
 		}
 		// dohvati fhandle
@@ -838,7 +874,9 @@ char buffer[FOPEN_MAX_PATHSIZE];
 			int gft_entry = populate_new_gft_entry(new_fname, v->oft[fhandle].local_access);
 			// otvorio je nov fajl sad treba da se kopira i da se zatvori prethodni ako treba
 			if(gft_entry < 0){
-				return -1;
+				BUFFER = STATUS_INVALID;
+				IFRUN;
+				return 0; // pusti ga da se izvrsava
 			}
 
 			// fhandle ostaje isti jer ostaje isti oft ulaz

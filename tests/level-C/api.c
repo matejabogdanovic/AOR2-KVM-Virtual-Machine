@@ -74,10 +74,11 @@ int kvm_fopen(const char* fname, int access){
 	return inl(PORT_FILE); 
 }
 
+// vraca koliko je procitano
 int kvm_fread(int f, void* buffer, unsigned long size, unsigned long len){
 	outb(FREAD, PORT_FILE); // 2 je fread
 	outl(f, PORT_FILE); // prosledi fhandle
-	if(inb(PORT_FILE) == STATUS_INVALID)return -1; // status da li smem da radim operaciju
+	if(inb(PORT_FILE) == STATUS_INVALID)return 0; // status da li smem da radim operaciju
 
 	uint8_t c = 0; 
 	uint8_t status = 0; 
@@ -98,11 +99,11 @@ int kvm_fread(int f, void* buffer, unsigned long size, unsigned long len){
 }
 
 
-
+// vraca koliko je upisano
 int kvm_fwrite(int f, void* buffer, unsigned long size, unsigned long len){
 	outb(FWRITE, PORT_FILE); // 3 je fwrite
 	outl(f, PORT_FILE); // prosledi fhandle
-	if(inb(PORT_FILE) == STATUS_INVALID)return -1; // status da li smem da radim operaciju
+	if(inb(PORT_FILE) == STATUS_INVALID)return 0; // status da li smem da radim operaciju
 
 	uint8_t status = 0; 
 	uint8_t *src = (uint8_t*)buffer;
