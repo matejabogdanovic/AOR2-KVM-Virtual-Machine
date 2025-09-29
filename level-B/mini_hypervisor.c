@@ -464,7 +464,8 @@ static void* hypervisor_thread(void* guest_img_name){
 			case KVM_EXIT_IO:
 				if (v.run->io.direction == KVM_EXIT_IO_OUT && v.run->io.port == IO_PORT) {
 					char *p = (char *)v.run;
-					printf("%c", *(p + v.run->io.data_offset));
+					char outc = *(p + v.run->io.data_offset);
+					write(STDOUT_FILENO,&outc, 1);
 				}else if(v.run->io.direction == KVM_EXIT_IO_IN && v.run->io.port == IO_PORT){
 					char c ;
 					read(STDIN_FILENO, &c, 1);

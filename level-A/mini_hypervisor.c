@@ -384,9 +384,9 @@ for(int i = 1; i < argc; i++){
 		printf("not enough arguments\n");
 		return -1;
 	}
-	printf("MEM_SIZE = %lx \n", MEM_SIZE);
-	printf("PAGE_SIZE = %d \n", PAGE_SIZE);
-	printf("GUEST_IMAGE = %s \n", argv[GUEST_IMG]);
+	LOG(printf("MEM_SIZE = %lx \n", MEM_SIZE);)
+	LOG(printf("PAGE_SIZE = %d \n", PAGE_SIZE);)
+	LOG(printf("GUEST_IMAGE = %s \n", argv[GUEST_IMG]);)
 }
 
 
@@ -469,7 +469,8 @@ int main(int argc, char *argv[])
 			case KVM_EXIT_IO:
 				if (v.run->io.direction == KVM_EXIT_IO_OUT && v.run->io.port == IO_PORT) {
 					char *p = (char *)v.run;
-					printf("%c", *(p + v.run->io.data_offset));
+					char outc = *(p + v.run->io.data_offset);
+					write(STDOUT_FILENO,&outc, 1);
 				}else if(v.run->io.direction == KVM_EXIT_IO_IN && v.run->io.port == IO_PORT){
 					char c ;
 					read(STDIN_FILENO, &c, 1);

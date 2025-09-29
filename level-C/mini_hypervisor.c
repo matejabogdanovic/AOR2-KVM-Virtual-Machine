@@ -1126,7 +1126,8 @@ static void* hypervisor_thread(void* args){
 				if(v.run->io.port == PORT_IO){
 					if (v.run->io.direction == KVM_EXIT_IO_OUT ) {
 						char *p = (char *)v.run;
-						printf("%c", *(p + v.run->io.data_offset));
+						char outc = *(p + v.run->io.data_offset);
+					write(STDOUT_FILENO,&outc, 1);
 					}else if(v.run->io.direction == KVM_EXIT_IO_IN){
 						char c;
 						 read(STDIN_FILENO, &c, 1);

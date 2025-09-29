@@ -4,7 +4,7 @@
 
 void maintest(){
 		// kvm_getc();
-	int fhandle = kvm_fopen("./files/file2.txt", KVM_FILE_WRITE | KVM_FILE_READ);
+	int fhandle = kvm_fopen("./files/file1.txt", KVM_FILE_WRITE | KVM_FILE_READ);
 	int cnt = 256;
 
 	char buffer[256] = {0};
