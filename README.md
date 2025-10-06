@@ -39,7 +39,6 @@ This version extends Version A to support multiple guest VMs running concurrentl
 </ul>
 
 ### Example Usage
-./mini_hypervisor -m 4 -p 2 -g guest1.img guest2.img -f ./flowers.png
 ``./mini_hypervisor --memory 4 --page 2 --guest guest1.img guest2.img``
 
 
